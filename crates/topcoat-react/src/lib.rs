@@ -1,15 +1,22 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 //! Typed React islands for Topcoat.
 
+#[cfg(feature = "ssr")]
+mod server;
+
 use core::marker::PhantomData;
 
 use serde::Serialize;
+#[cfg(feature = "ssr")]
+use serde::ser::{SerializeMap, Serializer};
+#[cfg(feature = "ssr")]
+pub use server::*;
 use topcoat_asset::{Asset, CxAssetExt};
 use topcoat_core::{
     context::{Cx, JsonKey},
     error::Result,
 };
-use topcoat_view::View;
+use topcoat_view::{Unescaped, View};
 use topcoat_view_macro::view;
 
 const SWR_JSON_PREFIX: &str = "@topcoat/swr/";
@@ -19,6 +26,8 @@ const SWR_JSON_PREFIX: &str = "@topcoat/swr/";
 pub struct ReactComponent<Props> {
     name: &'static str,
     module: Asset,
+    #[cfg(feature = "ssr")]
+    server_renderer: Option<ReactServerRenderer>,
     props: PhantomData<fn() -> Props>,
 }
 
@@ -37,8 +46,19 @@ impl<Props> ReactComponent<Props> {
         Self {
             name,
             module,
+            #[cfg(feature = "ssr")]
+            server_renderer: None,
             props: PhantomData,
         }
+    }
+
+    /// Enables server rendering with a bundled `QuickJS` script.
+    #[cfg(feature = "ssr")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "ssr")))]
+    #[must_use]
+    pub const fn server_renderer(mut self, renderer: ReactServerRenderer) -> Self {
+        self.server_renderer = Some(renderer);
+        self
     }
 
     /// Starts an island builder with this component's typed props.
@@ -75,9 +95,19 @@ impl<Props> ReactIsland<Props> {
         T: Serialize + ?Sized,
     {
         let key = key.into();
+        #[cfg(feature = "ssr")]
+        let value = serde_json::to_value(value)?;
+        #[cfg(feature = "ssr")]
+        let json_key = cx.send_json_internal(format!("{SWR_JSON_PREFIX}{key}"), &value)?;
+        #[cfg(not(feature = "ssr"))]
         let json_key = cx.send_json_internal(format!("{SWR_JSON_PREFIX}{key}"), value)?;
         if !self.preloads.iter().any(|preload| preload.key == key) {
-            self.preloads.push(SWRPreload { key, json_key });
+            self.preloads.push(SWRPreload {
+                key,
+                json_key,
+                #[cfg(feature = "ssr")]
+                value,
+            });
         }
         Ok(self)
     }
@@ -95,21 +125,43 @@ where
     /// # Errors
     ///
     /// Returns an error if an asset requirement conflicts or the payload
-    /// cannot be serialized.
+    /// cannot be serialized. With server rendering enabled, it also returns
+    /// an error if `QuickJS` cannot evaluate the bundle or render the component.
     pub async fn render(self, cx: &Cx) -> Result<View> {
         cx.require_asset(self.component.module.module())?;
+
+        #[cfg(feature = "ssr")]
+        let server_html = match self.component.server_renderer {
+            Some(renderer) => {
+                let props = serde_json::to_string(&self.props)?;
+                let fallback = serde_json::to_string(&SWRFallback(&self.preloads))?;
+                Some(
+                    tokio::task::spawn_blocking(move || renderer.render(&props, &fallback))
+                        .await??,
+                )
+            }
+            None => None,
+        };
+        #[cfg(not(feature = "ssr"))]
+        let server_html: Option<String> = None;
         let payload = IslandPayload {
             props: &self.props,
             preloads: self.preloads.iter().map(SWRPreload::payload).collect(),
         };
         let payload_key = cx.send_json(&payload)?;
 
+        let server_rendered = server_html.is_some();
+        let server_html = server_html.map(Unescaped::new_unchecked);
+
         view! {
             cx =>
             <div
                 data-topcoat-react=(self.component.name)
                 data-topcoat-react-payload=(payload_key.as_str())
-            ></div>
+                data-topcoat-react-ssr=(server_rendered)
+            >
+                (server_html)
+            </div>
         }
     }
 }
@@ -118,6 +170,25 @@ where
 struct SWRPreload {
     key: String,
     json_key: JsonKey,
+    #[cfg(feature = "ssr")]
+    value: serde_json::Value,
+}
+
+#[cfg(feature = "ssr")]
+struct SWRFallback<'a>(&'a [SWRPreload]);
+
+#[cfg(feature = "ssr")]
+impl Serialize for SWRFallback<'_> {
+    fn serialize<S>(&self, serializer: S) -> core::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for preload in self.0 {
+            map.serialize_entry(&preload.key, &preload.value)?;
+        }
+        map.end()
+    }
 }
 
 impl SWRPreload {
@@ -151,6 +222,13 @@ mod tests {
     use super::*;
 
     const MODULE: Asset = asset!("tests/fixtures/component.js");
+    #[cfg(feature = "ssr")]
+    const SERVER_RENDERER: ReactServerRenderer = ReactServerRenderer::new(
+        r#"
+globalThis.topcoatReactRender = (props, fallback) =>
+  `<label>${props.label}:${fallback["/api/products"].join(",")}</label>`;
+"#,
+    );
 
     #[derive(Debug, Serialize)]
     struct Props {
@@ -234,5 +312,70 @@ content_type = "text/javascript"
         island.render(&cx).await.unwrap();
         assert!(error.to_string().contains("two different values"));
         assert!(response_error.to_string().contains("two different values"));
+    }
+
+    #[cfg(feature = "ssr")]
+    #[tokio::test]
+    async fn server_renders_props_and_swr_fallback() {
+        let cx = cx();
+        let component =
+            ReactComponent::<Props>::new("search", MODULE).server_renderer(SERVER_RENDERER);
+        let view = component
+            .props(Props { label: "Products" })
+            .preload(&cx, "/api/products", &[1, 2])
+            .unwrap()
+            .render(&cx)
+            .await
+            .unwrap();
+        let html = view.render(&cx);
+
+        assert!(html.contains("data-topcoat-react-ssr"), "{html}");
+        assert!(html.contains("<label>Products:1,2</label>"), "{html}");
+    }
+
+    #[cfg(feature = "ssr")]
+    #[tokio::test]
+    async fn server_rendered_islands_can_resolve_as_deferred_views() {
+        let cx = cx();
+        let component =
+            ReactComponent::<Props>::new("search", MODULE).server_renderer(SERVER_RENDERER);
+        let deferred = View::empty().defer(move |cx| async move {
+            component
+                .props(Props { label: "Deferred" })
+                .preload(&cx, "/api/products", &[3, 4])?
+                .render(&cx)
+                .await
+        });
+        let mut rendered = deferred.render_response(&cx);
+
+        assert!(rendered.html.contains("data-topcoat-defer-start"));
+        assert_eq!(rendered.deferred.len(), 1);
+        let completed = rendered
+            .deferred
+            .pop()
+            .unwrap()
+            .resolve(cx.handle())
+            .await
+            .unwrap();
+        let html = completed.render(&cx);
+        assert!(html.contains("data-topcoat-react-ssr"), "{html}");
+        assert!(html.contains("<label>Deferred:3,4</label>"), "{html}");
+    }
+
+    #[cfg(feature = "ssr")]
+    #[tokio::test]
+    async fn server_render_errors_are_returned() {
+        let cx = cx();
+        let renderer = ReactServerRenderer::new(
+            "globalThis.topcoatReactRender = () => { throw new Error('render failed') }",
+        );
+        let component = ReactComponent::<Props>::new("search", MODULE).server_renderer(renderer);
+        let error = component
+            .props(Props { label: "Products" })
+            .render(&cx)
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("render failed"), "{error}");
     }
 }

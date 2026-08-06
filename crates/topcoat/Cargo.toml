@@ -41,6 +41,8 @@ full = [
 	"mail",
 	"mail-smtp",
 	"multipart",
+	"react",
+	"react-ssr",
 	"router",
 	"runtime",
 	"serve",
@@ -132,6 +134,10 @@ react = [
 	"asset",
 	"view",
 	"dep:topcoat-react",
+]
+react-ssr = [
+	"react",
+	"topcoat-react/ssr",
 ]
 serve = [
 	"router",

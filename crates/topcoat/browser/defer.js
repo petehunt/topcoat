@@ -157,6 +157,7 @@ async function mountReact(element) {
       element,
       props: payload.props,
       fallback: Object.fromEntries(entries),
+      serverRendered: element.hasAttribute("data-topcoat-react-ssr"),
     });
     if (!element.isConnected) {
       cleanup?.();
