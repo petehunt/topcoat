@@ -45,6 +45,12 @@ pub mod mail;
 #[cfg(feature = "router")]
 pub mod router;
 
+#[cfg(feature = "react")]
+#[doc = include_str!("../docs/react.md")]
+pub mod react {
+    pub use topcoat_react::*;
+}
+
 #[cfg(feature = "view")]
 pub mod view;
 

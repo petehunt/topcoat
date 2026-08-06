@@ -52,6 +52,7 @@ changelog_include = [
     "topcoat-router",
     "topcoat-router-grammar",
     "topcoat-router-macro",
+    "topcoat-react",
     "topcoat-runtime",
     "topcoat-runtime-grammar",
     "topcoat-runtime-macro",
@@ -167,6 +168,11 @@ version_group = "topcoat"
 
 [[package]]
 name = "topcoat-router-macro"
+release = true
+version_group = "topcoat"
+
+[[package]]
+name = "topcoat-react"
 release = true
 version_group = "topcoat"
 

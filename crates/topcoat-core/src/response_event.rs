@@ -141,6 +141,28 @@ impl Default for ResponseEvents {
 }
 
 impl Cx {
+    fn send_json_with_key(&self, key: String, json: String) -> Result<JsonKey> {
+        let mut state = self.response_events.state();
+        if let Some(previous) = state.json.get(&key) {
+            if previous == &json {
+                return Ok(JsonKey(key));
+            }
+            return Err(
+                anyhow::anyhow!("JSON key {key:?} was sent with two different values").into(),
+            );
+        }
+
+        state.json.insert(key.clone(), json.clone());
+        self.response_events.push(
+            &mut state,
+            ResponseEvent::Json {
+                key: key.clone(),
+                json,
+            },
+        );
+        Ok(JsonKey(key))
+    }
+
     /// Sends JSON to browser code as soon as the response begins streaming.
     ///
     /// The returned key is unique within the response. Browser code can await
@@ -197,26 +219,23 @@ impl Cx {
             )
             .into());
         }
-        let json = serde_json::to_string(value)?;
-        let mut state = self.response_events.state();
-        if let Some(previous) = state.json.get(&key) {
-            if previous == &json {
-                return Ok(JsonKey(key));
-            }
-            return Err(
-                anyhow::anyhow!("JSON key {key:?} was sent with two different values").into(),
-            );
-        }
+        self.send_json_with_key(key, serde_json::to_string(value)?)
+    }
 
-        state.json.insert(key.clone(), json.clone());
-        self.response_events.push(
-            &mut state,
-            ResponseEvent::Json {
-                key: key.clone(),
-                json,
-            },
-        );
-        Ok(JsonKey(key))
+    /// Sends framework-owned JSON under a key in Topcoat's reserved namespace.
+    #[doc(hidden)]
+    pub fn send_json_internal<T>(&self, key: impl Into<String>, value: &T) -> Result<JsonKey>
+    where
+        T: Serialize + ?Sized,
+    {
+        let key = key.into();
+        if !key.starts_with(RESERVED_KEY_PREFIX) {
+            return Err(anyhow::anyhow!(
+                "internal JSON keys must begin with {RESERVED_KEY_PREFIX:?}"
+            )
+            .into());
+        }
+        self.send_json_with_key(key, serde_json::to_string(value)?)
     }
 
     #[doc(hidden)]
@@ -296,5 +315,22 @@ mod tests {
         let error = cx.send_json_named("@topcoat/value", &1).unwrap_err();
 
         assert!(error.to_string().contains("reserved"));
+    }
+
+    #[test]
+    fn internal_json_requires_and_deduplicates_the_reserved_namespace() {
+        let cx = CxTestBuilder::new().build();
+
+        let first = cx.send_json_internal("@topcoat/swr//foo", &1).unwrap();
+        let second = cx.send_json_internal("@topcoat/swr//foo", &1).unwrap();
+        let invalid = cx.send_json_internal("public", &1).unwrap_err();
+
+        assert_eq!(first, second);
+        assert!(invalid.to_string().contains("must begin"));
+        assert!(matches!(
+            cx.response_events.pop(),
+            Some(ResponseEvent::Json { key, .. }) if key == "@topcoat/swr//foo"
+        ));
+        assert!(cx.response_events.pop().is_none());
     }
 }

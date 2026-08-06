@@ -19,6 +19,7 @@ default = [
 	"font",
 	"icon",
 	"router",
+	"react",
 	"runtime",
 	"serve",
 	"session",
@@ -127,6 +128,11 @@ router = [
 	"topcoat-runtime?/router",
 	"topcoat-session?/router",
 ]
+react = [
+	"asset",
+	"view",
+	"dep:topcoat-react",
+]
 serve = [
 	"router",
 	"dep:futures-util",
@@ -188,6 +194,7 @@ topcoat-mail = { workspace = true, optional = true }
 topcoat-mail-macro = { workspace = true, optional = true }
 topcoat-router = { workspace = true, optional = true }
 topcoat-router-macro = { workspace = true, optional = true }
+topcoat-react = { workspace = true, optional = true }
 topcoat-runtime = { workspace = true, optional = true }
 topcoat-runtime-macro = { workspace = true, optional = true }
 topcoat-session = { workspace = true, optional = true }

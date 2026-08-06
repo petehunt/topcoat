@@ -2870,6 +2870,7 @@ dependencies = [
  "topcoat-icon-macro",
  "topcoat-mail",
  "topcoat-mail-macro",
+ "topcoat-react",
  "topcoat-router",
  "topcoat-router-macro",
  "topcoat-runtime",
@@ -3136,6 +3137,18 @@ dependencies = [
  "tokio",
  "topcoat",
  "topcoat-mail-grammar",
+]
+
+[[package]]
+name = "topcoat-react"
+version = "0.5.0"
+dependencies = [
+ "serde",
+ "tokio",
+ "topcoat-asset",
+ "topcoat-core",
+ "topcoat-view",
+ "topcoat-view-macro",
 ]
 
 [[package]]
