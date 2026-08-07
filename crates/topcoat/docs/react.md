@@ -33,10 +33,13 @@ async fn search(cx: &Cx) -> Result<View> {
         .props(SearchProps {
             placeholder: "Search products".to_owned(),
         })
+        .class("search-island")
         .render(cx)
         .await
 }
 ```
+
+`class` applies to the island's outer element. Use it for layout that must be stable before the client module loads.
 
 The client module registers the same name. The mount function receives the DOM element, decoded props, an SWR fallback object, and a `serverRendered` boolean. Return a cleanup function so Topcoat can unmount the component when htmx or another client removes its island:
 

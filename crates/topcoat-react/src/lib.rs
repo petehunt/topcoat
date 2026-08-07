@@ -5,6 +5,7 @@
 mod server;
 
 use core::marker::PhantomData;
+use std::borrow::Cow;
 
 use serde::Serialize;
 #[cfg(feature = "ssr")]
@@ -68,6 +69,7 @@ impl<Props> ReactComponent<Props> {
             component: self,
             props,
             preloads: Vec::new(),
+            class: None,
         }
     }
 }
@@ -78,9 +80,17 @@ pub struct ReactIsland<Props> {
     component: ReactComponent<Props>,
     props: Props,
     preloads: Vec<SWRPreload>,
+    class: Option<Cow<'static, str>>,
 }
 
 impl<Props> ReactIsland<Props> {
+    /// Sets classes on the island's outer element.
+    #[must_use]
+    pub fn class(mut self, class: impl Into<Cow<'static, str>>) -> Self {
+        self.class = Some(class.into());
+        self
+    }
+
     /// Streams data into SWR's fallback cache before this island mounts.
     ///
     /// Reusing a key with the same value is deduplicated for the response.
@@ -159,6 +169,7 @@ where
                 data-topcoat-react=(self.component.name)
                 data-topcoat-react-payload=(payload_key.as_str())
                 data-topcoat-react-ssr=(server_rendered)
+                class=(self.class)
             >
                 (server_html)
             </div>
@@ -260,6 +271,7 @@ content_type = "text/javascript"
         let component = ReactComponent::<Props>::new("search", MODULE);
         let view = component
             .props(Props { label: "Products" })
+            .class("contents grow")
             .preload(&cx, "/api/products", &[1, 2])
             .unwrap()
             .render(&cx)
@@ -270,6 +282,7 @@ content_type = "text/javascript"
 
         assert!(html.contains("data-topcoat-react=\"search\""), "{html}");
         assert!(html.contains("data-topcoat-react-payload="), "{html}");
+        assert!(html.contains("class=\"contents grow\""), "{html}");
         assert!(matches!(
             events.try_next(),
             Some(ResponseEvent::Json { key, json })
