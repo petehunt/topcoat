@@ -27,6 +27,16 @@ pub(crate) struct Component {
 }
 
 impl Component {
+    pub(super) fn emit_render_future(&self) -> TokenStream {
+        let future = match &self.children {
+            Some(children) if children.is_async() => {
+                self.render_future_with_async_children(children)
+            }
+            _ => self.render_future(),
+        };
+        self.identity_future(&future)
+    }
+
     /// Returns the site key expression naming this invocation site.
     ///
     /// `file!`, `line!`, and `column!` are spanned onto the component path,
@@ -192,13 +202,7 @@ impl Emit for Component {
         // Children that render components of their own resolve through a
         // reserved slot, so the component overlaps with them instead of
         // awaiting them while the props build.
-        let future = match &self.children {
-            Some(children) if children.is_async() => {
-                self.render_future_with_async_children(children)
-            }
-            _ => self.render_future(),
-        };
-        let future = self.identity_future(&future);
+        let future = self.emit_render_future();
 
         emitter.hoist_future(span, &ident, &future);
         emitter.burst(quote_spanned! {span=> __b.view(#ident); });

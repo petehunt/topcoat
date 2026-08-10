@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 
 #[cfg(feature = "http")]
 use http::{HeaderMap, StatusCode};
@@ -166,6 +166,16 @@ impl View {
         }
     }
 
+    /// Uses this view as a placeholder for work streamed after the response shell.
+    #[must_use]
+    pub fn defer<F, Fut>(self, render: F) -> Self
+    where
+        F: FnOnce(Cx) -> Fut + Send + 'static,
+        Fut: Future<Output = topcoat_core::error::Result<View>> + Send + 'static,
+    {
+        crate::defer(self, render)
+    }
+
     /// Renders the view into an HTML string.
     #[cfg_attr(
         feature = "http",
@@ -233,6 +243,7 @@ impl View {
                 html: body.to_owned(),
                 status_code: None,
                 headers: HeaderMap::new(),
+                deferred: Vec::new(),
             },
             ViewRepr::Scoped {
                 buffer,
@@ -242,11 +253,12 @@ impl View {
                 let mut html = String::with_capacity(size_hint);
                 let mut f = Formatter::new(&mut html);
                 Self::execute(buffer, entry, cx, &mut f);
-                let (status_code, headers) = f.into_recorded();
+                let (status_code, headers, deferred) = f.into_recorded();
                 RenderedResponse {
                     html,
                     status_code,
                     headers,
+                    deferred,
                 }
             }
             ViewRepr::Owned {
@@ -257,11 +269,12 @@ impl View {
                 let mut html = String::with_capacity(size_hint);
                 let mut f = Formatter::new(&mut html);
                 Renderer::new(&buffer, entry).execute(cx, &mut f);
-                let (status_code, headers) = f.into_recorded();
+                let (status_code, headers, deferred) = f.into_recorded();
                 RenderedResponse {
                     html,
                     status_code,
                     headers,
+                    deferred,
                 }
             }
         }
@@ -298,6 +311,9 @@ pub struct RenderedResponse {
     /// Each name carries the values of the first render part that mentioned
     /// it.
     pub headers: HeaderMap,
+    /// Deferred work discovered while rendering the initial HTML.
+    #[doc(hidden)]
+    pub deferred: Vec<crate::DeferredTask>,
 }
 
 #[cfg(test)]

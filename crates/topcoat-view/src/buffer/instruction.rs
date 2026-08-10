@@ -2,21 +2,33 @@
 use crate::buffer::HeadersPtr;
 use crate::{
     HtmlContext,
-    buffer::{DynPtr, InstructionPtr, StaticStrPtr, StringPtr, ViewPtr},
+    buffer::{DeferredPtr, DynPtr, InstructionPtr, StaticStrPtr, StringPtr, ViewPtr},
 };
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
     /// Jump into a nested block, returning here at its [`Ret`](Self::Ret).
-    Call { entry: InstructionPtr },
+    Call {
+        entry: InstructionPtr,
+    },
     /// Return back to the previous call instruction, if any.
     Ret,
     /// Jump to `entry` without recording a return address.
-    Jmp { entry: InstructionPtr },
+    Jmp {
+        entry: InstructionPtr,
+    },
     /// Holds a reserved slot until it is filled; executing it panics.
     Placeholder,
+    DeferredStart {
+        ptr: DeferredPtr,
+    },
+    DeferredEnd {
+        ptr: DeferredPtr,
+    },
     /// Execute a spliced owned view's block in the buffer it carries.
-    View { ptr: ViewPtr },
+    View {
+        ptr: ViewPtr,
+    },
 
     /// A boolean rendered as text.
     #[non_exhaustive]
@@ -58,7 +70,10 @@ pub enum Instruction {
     #[non_exhaustive]
     F64(f64),
     /// A character rendered for the recorded context.
-    Char { value: char, context: HtmlContext },
+    Char {
+        value: char,
+        context: HtmlContext,
+    },
 
     /// A static string held by reference, and its context.
     ///
@@ -96,7 +111,10 @@ pub enum Instruction {
         context: HtmlContext,
     },
     /// A part that writes its output at render time, and its context.
-    Dyn { ptr: DynPtr, context: HtmlContext },
+    Dyn {
+        ptr: DynPtr,
+        context: HtmlContext,
+    },
 
     /// A response status code recorded at render time; renders no content.
     #[cfg(feature = "http")]
@@ -105,7 +123,9 @@ pub enum Instruction {
     /// Response headers recorded at render time; renders no content.
     #[cfg(feature = "http")]
     #[non_exhaustive]
-    Headers { ptr: HeadersPtr },
+    Headers {
+        ptr: HeadersPtr,
+    },
 }
 
 const _: () = {

@@ -52,6 +52,7 @@ changelog_include = [
     "topcoat-router",
     "topcoat-router-grammar",
     "topcoat-router-macro",
+    "topcoat-react",
     "topcoat-runtime",
     "topcoat-runtime-grammar",
     "topcoat-runtime-macro",
@@ -59,6 +60,7 @@ changelog_include = [
     "topcoat-tailwind",
     "topcoat-ui",
     "topcoat-ui-registry",
+    "topcoat-vercel",
     "topcoat-view",
     "topcoat-view-grammar",
     "topcoat-view-macro",
@@ -170,6 +172,11 @@ release = true
 version_group = "topcoat"
 
 [[package]]
+name = "topcoat-react"
+release = true
+version_group = "topcoat"
+
+[[package]]
 name = "topcoat-runtime"
 release = true
 version_group = "topcoat"
@@ -201,6 +208,11 @@ version_group = "topcoat"
 
 [[package]]
 name = "topcoat-ui-registry"
+release = true
+version_group = "topcoat"
+
+[[package]]
+name = "topcoat-vercel"
 release = true
 version_group = "topcoat"
 

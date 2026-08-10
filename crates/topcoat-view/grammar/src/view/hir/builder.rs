@@ -4,8 +4,8 @@ use proc_macro2::{Span, TokenStream};
 use syn::{Expr, Pat, Path};
 
 use super::{
-    Component, ExprKind, ExprNode, ForLoop, IfElse, Local, MatchArm, MatchExpr, Node, Scope,
-    Statement, StaticSegment,
+    Component, Deferred, ExprKind, ExprNode, ForLoop, IfElse, Local, MatchArm, MatchExpr, Node,
+    Scope, Statement, StaticSegment,
 };
 use crate::view::{NamedArg, Nodes};
 
@@ -130,6 +130,41 @@ impl ViewBuilder {
             ordinal,
             repeats: self.repeats,
             children,
+            span,
+        }));
+    }
+
+    /// Lowers a deferred component and the placeholder rendered before it resolves.
+    pub fn deferred(
+        &mut self,
+        path: &Path,
+        named_args: &[NamedArg],
+        children: &Nodes,
+        placeholder: &Nodes,
+        span: Span,
+        component_span: Span,
+    ) {
+        self.flush();
+        let ordinal = self.sites.get();
+        self.sites.set(ordinal + 1);
+        let children = (!children.is_empty()).then(|| {
+            let mut child_builder = self.nested(false);
+            children.lower(&mut child_builder);
+            child_builder.finish()
+        });
+        let mut placeholder_builder = self.nested(false);
+        placeholder.lower(&mut placeholder_builder);
+        self.nodes.push(Node::Deferred(Deferred {
+            component: Component {
+                path: path.clone(),
+                named_args: named_args.to_vec(),
+                key: None,
+                ordinal,
+                repeats: self.repeats,
+                children,
+                span: component_span,
+            },
+            placeholder: placeholder_builder.finish(),
             span,
         }));
     }

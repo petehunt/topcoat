@@ -377,6 +377,31 @@ The rendered markup always appears in source order, no matter which component fi
 
 Plain Rust in the view, such as interpolated expressions, `let` bindings, loop iterators, and branch conditions, still runs in source order. Only the components render concurrently.
 
+# Deferred Components
+
+Prefix a component call with `defer` and follow it with the placeholder to send in the initial response:
+
+```rust
+# use topcoat::{Result, view::*};
+# #[component]
+# async fn activity() -> Result { view! { <p>"Activity is ready."</p> } }
+# #[component]
+# async fn example() -> Result {
+view! {
+    <section>
+        <h2>"Activity"</h2>
+        defer activity() {
+            <p aria-busy="true">"Loading activity..."</p>
+        }
+    </section>
+}
+# }
+```
+
+The macro returns an ordinary view containing the placeholder and deferred component work. Parent components and layouts compose that view normally. When the final view becomes an HTTP response, deferred components run concurrently and their completed views stream in completion order.
+
+The document must include the external `defer_script()` helper for streamed template patches to update the page. Use `View::defer` directly when the deferred work is not a component call.
+
 # Boolean And Conditional Attributes
 
 [Boolean HTML attributes](https://developer.mozilla.org/en-US/docs/Glossary/Boolean/HTML) such as `disabled`, `required`, and `checked` are true when the attribute is present and false when it is absent. HTML expects a present boolean attribute to have an empty value.

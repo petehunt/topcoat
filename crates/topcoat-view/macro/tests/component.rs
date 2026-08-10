@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex};
+
 use topcoat::{
     Result,
     context::Cx,
@@ -93,6 +95,74 @@ async fn component_can_call_other_components_and_forward_child_views() {
 
     assert!(html.contains("<h2>Outer</h2>"));
     assert!(html.contains("<em>inner</em>"));
+}
+
+#[component]
+async fn concurrent_slot(log: Arc<Mutex<Vec<String>>>, label: &'static str) -> Result {
+    log.lock().unwrap().push(format!("enter {label}"));
+    tokio::task::yield_now().await;
+    log.lock().unwrap().push(format!("exit {label}"));
+
+    view! { <span>(label)</span> }
+}
+
+#[component]
+async fn concurrent_group(
+    log: Arc<Mutex<Vec<String>>>,
+    first: &'static str,
+    second: &'static str,
+    child: View,
+) -> Result {
+    view! {
+        <section>
+            concurrent_slot(log: Arc::clone(&log), label: first)
+            (child)
+            concurrent_slot(log: Arc::clone(&log), label: second)
+        </section>
+    }
+}
+
+#[tokio::test]
+async fn grandparent_parent_and_child_components_render_concurrently() {
+    let cx = empty_cx();
+    let __cx = &cx;
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let result: Result = view! {
+        concurrent_group(
+            log: Arc::clone(&log),
+            first: "grandparent-a",
+            second: "grandparent-b",
+            concurrent_group(
+                log: Arc::clone(&log),
+                first: "parent-a",
+                second: "parent-b",
+                concurrent_slot(log: Arc::clone(&log), label: "child-a")
+                concurrent_slot(log: Arc::clone(&log), label: "child-b")
+            )
+        )
+    };
+
+    assert_eq!(
+        *log.lock().unwrap(),
+        [
+            "enter grandparent-a",
+            "enter grandparent-b",
+            "enter parent-a",
+            "enter parent-b",
+            "enter child-a",
+            "enter child-b",
+            "exit grandparent-a",
+            "exit grandparent-b",
+            "exit parent-a",
+            "exit parent-b",
+            "exit child-a",
+            "exit child-b",
+        ],
+    );
+    assert_eq!(
+        result.unwrap().render(__cx),
+        "<section><span>grandparent-a</span><section><span>parent-a</span><span>child-a</span><span>child-b</span><span>parent-b</span></section><span>grandparent-b</span></section>",
+    );
 }
 
 #[component]

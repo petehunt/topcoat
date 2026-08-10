@@ -95,6 +95,13 @@ impl ViewBuffer {
         }
     }
 
+    pub(crate) fn push_deferred(&mut self, task: crate::DeferredTask, placeholder: View) {
+        let ptr = self.consts.push_deferred(task);
+        self.push_instruction(Instruction::DeferredStart { ptr });
+        self.push_view(placeholder);
+        self.push_instruction(Instruction::DeferredEnd { ptr });
+    }
+
     /// Appends the return instruction that terminates a view's instruction
     /// block.
     pub fn push_ret(&mut self) {

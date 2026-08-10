@@ -59,6 +59,8 @@ impl InstructionBuffer {
                 Instruction::Ret => "Ret",
                 Instruction::Jmp { .. } => "Jmp",
                 Instruction::Placeholder => "Placeholder",
+                Instruction::DeferredStart { .. } => "DeferredStart",
+                Instruction::DeferredEnd { .. } => "DeferredEnd",
                 Instruction::View { .. } => "View",
                 Instruction::Bool(_) => "Bool",
                 Instruction::I8(_) => "I8",

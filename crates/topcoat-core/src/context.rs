@@ -13,7 +13,7 @@ pub use context_map::*;
 pub use id::*;
 
 pub use crate::memoize::MemoizeAsRef;
-use crate::{abort::AbortStore, memoize::MemoizeCache};
+use crate::{abort::AbortStore, memoize::MemoizeCache, response_event::ResponseEvents};
 
 /// The request context.
 ///
@@ -28,7 +28,7 @@ use crate::{abort::AbortStore, memoize::MemoizeCache};
 /// WebSocket task, takes an owned handle with [`detach`](Self::detach).
 #[derive(Debug, Default)]
 pub struct Cx {
-    inner: Arc<CxInner>,
+    pub(crate) inner: Arc<CxInner>,
 }
 
 impl Cx {
@@ -48,6 +48,7 @@ impl Cx {
                 request_context,
                 memoize_cache: MemoizeCache::new(),
                 abort_store: AbortStore::new(),
+                response_events: Arc::new(ResponseEvents::new()),
                 sealed: AtomicBool::new(false),
             }),
         }
@@ -130,12 +131,13 @@ impl Cx {
 
 /// The state behind every handle to one request's [`Cx`].
 #[derive(Debug, Default)]
-struct CxInner {
+pub(crate) struct CxInner {
     id: CxId,
     app_context: Arc<ContextMap>,
     request_context: ContextMap,
     memoize_cache: MemoizeCache,
     abort_store: AbortStore,
+    pub(crate) response_events: Arc<ResponseEvents>,
     sealed: AtomicBool,
 }
 

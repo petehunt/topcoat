@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    DynViewPart,
+    DeferredTask, DynViewPart,
     buffer::{InstructionPtr, ViewBuffer},
 };
 
@@ -28,6 +28,9 @@ pub struct DynPtr(usize);
 #[derive(Debug, Clone, Copy)]
 pub struct ViewPtr(usize);
 
+#[derive(Debug, Clone, Copy)]
+pub struct DeferredPtr(usize);
+
 /// The index of a header map in a [`ConstBuffer`].
 #[cfg(feature = "http")]
 #[derive(Debug, Clone, Copy)]
@@ -46,6 +49,7 @@ pub struct ConstBuffer {
     strs: String,
     dyns: Vec<Box<dyn DynViewPart>>,
     views: Vec<(Arc<ViewBuffer>, InstructionPtr)>,
+    deferred: Vec<DeferredTask>,
     #[cfg(feature = "http")]
     headers: Vec<http::HeaderMap>,
 }
@@ -114,6 +118,16 @@ impl ConstBuffer {
     pub fn fetch_view(&self, ptr: ViewPtr) -> (&ViewBuffer, InstructionPtr) {
         let (buffer, entry) = &self.views[ptr.0];
         (buffer, *entry)
+    }
+
+    pub fn push_deferred(&mut self, task: DeferredTask) -> DeferredPtr {
+        self.deferred.push(task);
+        DeferredPtr(self.deferred.len() - 1)
+    }
+
+    #[must_use]
+    pub fn fetch_deferred(&self, ptr: DeferredPtr) -> &DeferredTask {
+        &self.deferred[ptr.0]
     }
 
     #[cfg(feature = "http")]

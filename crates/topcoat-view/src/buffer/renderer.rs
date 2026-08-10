@@ -55,6 +55,24 @@ impl<'a> Renderer<'a> {
                 Instruction::Placeholder => {
                     panic!("tried to render a placeholder view before it was filled")
                 }
+                Instruction::DeferredStart { ptr } => {
+                    let task = consts.fetch_deferred(*ptr);
+                    write!(
+                        f,
+                        r#"<template data-topcoat-defer-start="{}"></template>"#,
+                        task.id(),
+                    )
+                    .unwrap();
+                    f.record_deferred(task.clone());
+                }
+                Instruction::DeferredEnd { ptr } => {
+                    write!(
+                        f,
+                        r#"<template data-topcoat-defer-end="{}"></template>"#,
+                        consts.fetch_deferred(*ptr).id(),
+                    )
+                    .unwrap();
+                }
                 Instruction::View { ptr } => {
                     let (buffer, entry) = consts.fetch_view(*ptr);
                     Renderer::new(buffer, entry).execute(cx, f);

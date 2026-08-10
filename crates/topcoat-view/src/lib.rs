@@ -3,6 +3,7 @@
 mod buffer;
 mod component;
 mod css;
+mod deferred;
 mod format;
 mod html;
 pub mod identity;
@@ -14,6 +15,7 @@ mod view;
 
 pub use component::*;
 pub use css::*;
+pub use deferred::*;
 pub use format::*;
 pub use html::*;
 pub use part::*;

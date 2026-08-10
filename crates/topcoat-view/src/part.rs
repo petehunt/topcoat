@@ -304,6 +304,16 @@ impl<'a> PartsWriter<'a> {
         self
     }
 
+    pub(crate) fn push_deferred(
+        &mut self,
+        task: crate::DeferredTask,
+        placeholder: View,
+    ) -> &mut Self {
+        self.size_hint += placeholder.size_hint();
+        self.buffer.push_deferred(task, placeholder);
+        self
+    }
+
     /// Records a response status code; renders no content.
     #[cfg(feature = "http")]
     #[inline]

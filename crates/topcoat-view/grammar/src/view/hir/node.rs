@@ -1,4 +1,5 @@
 mod component;
+mod deferred;
 mod expr_node;
 mod for_loop;
 mod if_else;
@@ -8,6 +9,7 @@ mod statement;
 mod static_segment;
 
 pub(crate) use component::*;
+pub(crate) use deferred::*;
 pub(crate) use expr_node::*;
 pub(crate) use for_loop::*;
 pub(crate) use if_else::*;
@@ -25,6 +27,8 @@ pub(crate) enum Node {
     StaticSegment(StaticSegment),
     /// A component invocation, emitted through the props builder.
     Component(Component),
+    /// A deferred component invocation paired with its placeholder.
+    Deferred(Deferred),
     /// A dynamic expression, emitted through its [`ExprKind`]'s helper.
     ExprNode(ExprNode),
     /// A `let pat = expr;` binding, in scope for the nodes that follow it.
@@ -44,7 +48,7 @@ impl Node {
     /// under its nested scopes, so emitting it produces a future to await.
     pub(crate) fn is_async(&self) -> bool {
         match self {
-            Self::Component(_) => true,
+            Self::Component(_) | Self::Deferred(_) => true,
             Self::ForLoop(node) => node.body.is_async(),
             Self::IfElse(node) => node.then_branch.is_async() || node.else_branch.is_async(),
             Self::MatchExpr(node) => node.arms.iter().any(|arm| arm.body.is_async()),
@@ -60,6 +64,7 @@ impl Emit for Node {
         match self {
             Self::StaticSegment(node) => node.emit(emitter),
             Self::Component(node) => node.emit(emitter),
+            Self::Deferred(node) => node.emit(emitter),
             Self::ExprNode(node) => node.emit(emitter),
             Self::Local(node) => node.emit(emitter),
             Self::Statement(node) => node.emit(emitter),
