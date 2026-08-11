@@ -2,9 +2,9 @@ use http_body_util::BodyExt;
 use serde::Deserialize;
 use topcoat::{
     Result,
-    context::Cx,
+    context::{Cx, memoize},
     router::{Body, Router, content::Form, error::redirect, page, request::uri, to_bytes},
-    view::{Deferred, boundary, defer, view},
+    view::{Deferred, boundary, component, defer, view},
 };
 
 mod common;
@@ -102,67 +102,116 @@ async fn anything() -> Result {
 
 #[page("/stream")]
 async fn stream(cx: &Cx) -> Result {
-    let content = match defer(cx, async {
-        tokio::task::yield_now().await;
-        42_u8
-    }) {
+    let content = match defer(cx, stream_content, StreamContentProps {}) {
         Deferred::Pending => view! { <p>"loading"</p> },
-        Deferred::Ready(value) => view! { <p>(value)</p> },
+        Deferred::Ready(content) => content,
     }?;
     view! { (boundary(content)) }
+}
+
+#[component]
+async fn stream_content(cx: &Cx) -> Result {
+    stream_load(cx).await;
+    view! { <p>"42"</p> }
+}
+
+#[memoize]
+async fn stream_load(cx: &Cx) {
+    let _ = cx;
+    tokio::task::yield_now().await;
 }
 
 #[page("/stream-redirect")]
 async fn stream_redirect(cx: &Cx) -> Result {
-    match defer(cx, async {
-        tokio::task::yield_now().await;
-        redirect("/target")
-    }) {
+    match defer(cx, stream_redirect_content, StreamRedirectContentProps {}) {
         Deferred::Pending => view! { <p>"waiting"</p> },
-        Deferred::Ready(error) => Err(error.into()),
+        Deferred::Ready(content) => content,
     }
+}
+
+#[component]
+async fn stream_redirect_content(cx: &Cx) -> Result {
+    redirect_load(cx).await;
+    Err(redirect("/target").into())
+}
+
+#[memoize]
+async fn redirect_load(cx: &Cx) {
+    let _ = cx;
+    tokio::task::yield_now().await;
 }
 
 #[page("/stream-pending")]
 async fn stream_pending(cx: &Cx) -> Result {
-    match defer(cx, std::future::pending::<u8>()) {
+    match defer(cx, pending_content, PendingContentProps {}) {
         Deferred::Pending => view! { <p>"first"</p> },
-        Deferred::Ready(value) => view! { <p>(value)</p> },
+        Deferred::Ready(content) => content,
     }
+}
+
+#[component]
+async fn pending_content() -> Result {
+    std::future::pending::<()>().await;
+    view! {}
 }
 
 #[page("/stream-error")]
 async fn stream_error(cx: &Cx) -> Result {
-    match defer(cx, async {
-        tokio::task::yield_now().await;
-        LateError
-    }) {
+    match defer(cx, stream_error_content, StreamErrorContentProps {}) {
         Deferred::Pending => view! { <p>"waiting"</p> },
-        Deferred::Ready(error) => Err(error.into()),
+        Deferred::Ready(content) => content,
     }
+}
+
+#[component]
+async fn stream_error_content(cx: &Cx) -> Result {
+    error_load(cx).await;
+    Err(LateError.into())
+}
+
+#[memoize]
+async fn error_load(cx: &Cx) {
+    let _ = cx;
+    tokio::task::yield_now().await;
 }
 
 #[page("/stream-chain")]
 async fn stream_chain(cx: &Cx) -> Result {
-    let content = match defer(cx, async {
-        tokio::task::yield_now().await;
-        1_u8
-    }) {
+    let content = match defer(cx, first_content, FirstContentProps {}) {
         Deferred::Pending => view! { <p>"first pending"</p> },
-        Deferred::Ready(_) => match defer(cx, async {
-            tokio::task::yield_now().await;
-            2_u8
-        }) {
-            Deferred::Pending => view! { <p>"second pending"</p> },
-            Deferred::Ready(value) => view! {
-                <p>
-                    "done "
-                    (value)
-                </p>
-            },
-        },
+        Deferred::Ready(content) => {
+            content?;
+            match defer(cx, second_content, SecondContentProps {}) {
+                Deferred::Pending => view! { <p>"second pending"</p> },
+                Deferred::Ready(content) => content,
+            }
+        }
     }?;
     view! { (boundary(content)) }
+}
+
+#[component]
+async fn first_content(cx: &Cx) -> Result {
+    first_load(cx).await;
+    view! { <p>"first ready"</p> }
+}
+
+#[memoize]
+async fn first_load(cx: &Cx) {
+    let _ = cx;
+    tokio::task::yield_now().await;
+}
+
+#[component]
+async fn second_content(cx: &Cx) -> Result {
+    second_load(cx).await;
+    view! { <p>"done 2"</p> }
+}
+
+#[memoize]
+async fn second_load(cx: &Cx) {
+    let _ = cx;
+    tokio::task::yield_now().await;
 }
 
 #[tokio::test]

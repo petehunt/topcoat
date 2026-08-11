@@ -1,5 +1,4 @@
 use std::{
-    any::Any,
     collections::HashMap,
     future::Future,
     hash::{Hash, Hasher},
@@ -10,9 +9,12 @@ use std::{
 };
 
 use futures_util::task::noop_waker_ref;
-use topcoat_core::context::Cx;
+use topcoat_core::{context::Cx, error::Result};
 
-use crate::identity::Identity;
+use crate::{
+    Component, View,
+    identity::{Identity, IdentityFuture, SiteKey},
+};
 
 /// The current value of deferred work.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,12 +30,11 @@ pub enum Deferred<T> {
 pub struct DeferredKey(u128);
 
 #[doc(hidden)]
-pub type DeferredFuture =
-    Pin<Box<dyn Future<Output = (DeferredKey, Box<dyn Any + Send + Sync>)> + Send + 'static>>;
+pub type DeferredFuture = Pin<Box<dyn Future<Output = DeferredKey> + Send + 'static>>;
 
 enum DeferredEntry {
     Pending,
-    Ready(Box<dyn Any + Send + Sync>),
+    Ready,
 }
 
 #[derive(Default)]
@@ -60,46 +61,56 @@ impl DeferredState {
     }
 
     #[doc(hidden)]
-    pub fn resolve(&self, key: DeferredKey, value: Box<dyn Any + Send + Sync>) {
+    pub fn resolve(&self, key: DeferredKey) {
         self.entries
             .lock()
             .expect("deferred state lock poisoned")
-            .insert(key, DeferredEntry::Ready(value));
+            .insert(key, DeferredEntry::Ready);
     }
 }
 
-/// Registers work that may complete after the first response chunk.
+/// Renders a component that may complete after the first response chunk.
 ///
 /// Each call is identified by its component identity and source location. The
-/// first render polls `future` once. A future that completes without yielding
-/// returns [`Deferred::Ready`] immediately. A future that yields is registered
-/// and returns [`Deferred::Pending`]; later render passes return
-/// [`Deferred::Ready`] with its completed value.
+/// component is polled once on each render pass. A component that completes
+/// without yielding returns [`Deferred::Ready`] immediately. A component that
+/// yields is registered and returns [`Deferred::Pending`]. Once it completes,
+/// the page renders again and reconstructs the component. Data loaded by the
+/// component should be memoized so the new render completes immediately.
 ///
 /// # Panics
 ///
 /// Panics if the enclosing component identity is ambiguous, if the same call
-/// returns different output types across passes, or if deferred state was
-/// poisoned by another panic.
+/// is poisoned by another panic.
 #[track_caller]
-pub fn defer<T, F>(cx: &Cx, future: F) -> Deferred<T>
+pub fn defer<C>(cx: &Cx, component: C, props: C::Props) -> Deferred<Result<View>>
 where
-    T: Clone + Send + Sync + 'static,
+    C: Component + 'static,
+    C::Props: 'static,
+{
+    let location = Location::caller();
+    let site = SiteKey::new(location.file(), location.line(), location.column(), 0);
+    let owned_cx = cx.detach();
+    defer_future(
+        cx,
+        IdentityFuture::new(site, async move {
+            Component::render(component, &owned_cx, props).await
+        }),
+        location,
+    )
+}
+
+fn defer_future<T, F>(cx: &Cx, future: F, location: &'static Location<'static>) -> Deferred<T>
+where
+    T: Send + 'static,
     F: Future<Output = T> + Send + 'static,
 {
-    let key = deferred_key(Location::caller());
+    let key = deferred_key(location);
     let state = deferred_state(cx);
-    let mut entries = state.entries.lock().expect("deferred state lock poisoned");
+    let entries = state.entries.lock().expect("deferred state lock poisoned");
     match entries.get(&key) {
-        Some(DeferredEntry::Ready(value)) => Deferred::Ready(
-            value
-                .downcast_ref::<T>()
-                .expect("one deferred call returned different types across render passes")
-                .clone(),
-        ),
         Some(DeferredEntry::Pending) => Deferred::Pending,
-        None => {
-            entries.insert(key, DeferredEntry::Pending);
+        Some(DeferredEntry::Ready) | None => {
             drop(entries);
             let mut future = Box::pin(future);
             match future
@@ -111,18 +122,22 @@ where
                         .entries
                         .lock()
                         .expect("deferred state lock poisoned")
-                        .insert(key, DeferredEntry::Ready(Box::new(value.clone())));
+                        .insert(key, DeferredEntry::Ready);
                     Deferred::Ready(value)
                 }
                 Poll::Pending => {
+                    state
+                        .entries
+                        .lock()
+                        .expect("deferred state lock poisoned")
+                        .insert(key, DeferredEntry::Pending);
                     state
                         .futures
                         .lock()
                         .expect("deferred future lock poisoned")
                         .push(Box::pin(async move {
-                            let value = future.await;
-                            let value: Box<dyn Any + Send + Sync> = Box::new(value);
-                            (key, value)
+                            let _ = future.await;
+                            key
                         }));
                     Deferred::Pending
                 }
@@ -151,11 +166,11 @@ mod tests {
     use super::*;
 
     fn immediate(cx: &Cx) -> Deferred<u32> {
-        defer(cx, async { 42 })
+        defer_future(cx, async { 42 }, Location::caller())
     }
 
     fn never(cx: &Cx) -> Deferred<()> {
-        defer(cx, std::future::pending())
+        defer_future(cx, std::future::pending(), Location::caller())
     }
 
     #[test]

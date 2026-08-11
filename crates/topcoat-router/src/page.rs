@@ -292,8 +292,8 @@ impl StreamingPage {
 
     async fn next_chunk(&mut self) -> Option<String> {
         loop {
-            let (key, value) = self.pending.next().await?;
-            self.deferred.resolve(key, value);
+            let key = self.pending.next().await?;
+            self.deferred.resolve(key);
             let mut chunk = match self.page.render_view(&self.cx, self.body.clone()).await {
                 Ok(view) => {
                     let next = Snapshot::parse(view.render_response(&self.cx).html);
