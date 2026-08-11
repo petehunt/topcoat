@@ -2,7 +2,7 @@
 
 Streaming rendering sends a page's initial HTML while selected work is still running. Later render passes append small swap instructions that replace only changed regions.
 
-Use [`defer`] to register a future. The first pass receives [`Deferred::Pending`]; after the future completes, a new pass receives [`Deferred::Ready`]. The future and its output must be owned, `Send`, and `'static` because they may outlive the page handler. The output must also be `Clone` so every later pass can observe the same completed value.
+Use [`defer`] to register a future. Topcoat polls a new future once during the first pass. If it completes immediately, that pass receives [`Deferred::Ready`]. If it yields, the pass receives [`Deferred::Pending`] and a new pass receives [`Deferred::Ready`] after completion. The future and its output must be owned, `Send`, and `'static` because they may outlive the page handler. The output must also be `Clone` so every later pass can observe the same completed value.
 
 ```rust
 use topcoat::{

@@ -8,5 +8,7 @@ pub mod context;
 pub mod cursor;
 pub mod error;
 pub mod fnv1a;
+#[doc(hidden)]
+pub mod global_memoize;
 pub mod internal;
 pub mod memoize;

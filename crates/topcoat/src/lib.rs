@@ -3,6 +3,20 @@
 
 extern crate self as topcoat;
 
+/// Caches one asynchronous load across requests, keyed by an expression.
+///
+/// Each invocation has an independent process-wide cache. Completed values
+/// are reused and concurrent misses for the same key share one in-flight
+/// future. The cache has no expiration or eviction.
+#[macro_export]
+macro_rules! memoize_global {
+    ($key:expr, $load:expr $(,)?) => {{
+        static CACHE: $crate::internal::GlobalMemoizeCache =
+            $crate::internal::GlobalMemoizeCache::new();
+        $crate::internal::global_memoize(&CACHE, $key, $load)
+    }};
+}
+
 #[cfg(feature = "router")]
 pub mod dev;
 

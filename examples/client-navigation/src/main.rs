@@ -31,35 +31,37 @@ async fn main() {
 #[layout("/")]
 async fn root_layout(cx: &Cx, slot: Result) -> Result {
     let current = uri(cx).path();
-    let status = match defer(cx, async {
-        tokio::time::sleep(Duration::from_millis(180)).await;
-        "top-level layout"
-    }) {
-        Deferred::Pending => "loading...",
-        Deferred::Ready(component) => component,
-    };
-    let navigation = view! {
-        <header class="shell">
-            <div>
+    let navigation = match defer(
+        cx,
+        topcoat::memoize_global!("top-level-layout", async {
+            tokio::time::sleep(Duration::from_millis(180)).await;
+        }),
+    ) {
+        Deferred::Pending => view! {
+            <header class="shell loading">
+                "LOADING TOP-LEVEL LAYOUT - NO NAV YET"
+            </header>
+        },
+        Deferred::Ready(()) => view! {
+            <header class="shell">
                 <strong>"Topcoat navigation"</strong>
-                <span class="status">(status)</span>
-            </div>
-            <nav aria-label="Top-level">
-                for (slug, label) in SECTIONS {
-                    <a
-                        href=(format!("/{slug}/overview"))
-                        class=(current
-                            .starts_with(&format!("/{slug}/"))
-                            .then_some("active"))
-                        aria-current=(current
-                            .starts_with(&format!("/{slug}/"))
-                            .then_some("page"))
-                    >
-                        (label)
-                    </a>
-                }
-            </nav>
-        </header>
+                <nav aria-label="Top-level">
+                    for (slug, label) in SECTIONS {
+                        <a
+                            href=(format!("/{slug}/overview"))
+                            class=(current
+                                .starts_with(&format!("/{slug}/"))
+                                .then_some("active"))
+                            aria-current=(current
+                                .starts_with(&format!("/{slug}/"))
+                                .then_some("page"))
+                        >
+                            (label)
+                        </a>
+                    }
+                </nav>
+            </header>
+        },
     }?;
 
     view! {
@@ -81,7 +83,7 @@ async fn root_layout(cx: &Cx, slot: Result) -> Result {
                     a.active { color: white; background: #3157d5; }
                     .nested { background: white; border: 1px solid #dfe5f0; border-radius: 14px; padding: 20px; }
                     .content { min-height: 180px; margin-top: 20px; padding: 24px; background: white; border-radius: 14px; box-shadow: 0 8px 30px #25365b12; }
-                    .status { color: #68748a; font-size: 13px; }
+                    .loading { margin-block: 20px; border: 6px dashed #d11; background: #ff0; color: #900; font: bold 20px monospace; text-align: center; }
                     [data-topcoat-navigating] { cursor: progress; }
                     "#
                 </style>
@@ -100,32 +102,34 @@ async fn section_layout(cx: &Cx, slot: Result) -> Result {
     let section = path_param::<Section>(cx);
     let current = path_param::<Content>(cx);
     valid_section(section)?;
-    let status = match defer(cx, async {
-        tokio::time::sleep(Duration::from_millis(260)).await;
-        "nested layout"
-    }) {
-        Deferred::Pending => "loading...",
-        Deferred::Ready(component) => component,
-    };
-    let navigation = view! {
-        <section class="nested">
-            <div>
+    let navigation = match defer(
+        cx,
+        topcoat::memoize_global!(section.to_owned(), async {
+            tokio::time::sleep(Duration::from_millis(260)).await;
+        }),
+    ) {
+        Deferred::Pending => view! {
+            <section class="nested loading">
+                "LOADING NESTED LAYOUT - NO NAV YET"
+            </section>
+        },
+        Deferred::Ready(()) => view! {
+            <section class="nested">
                 <strong>(section_name(section))</strong>
-                " section "
-                <span class="status">(status)</span>
-            </div>
-            <nav aria-label="Nested">
-                for (slug, label) in PAGES {
-                    <a
-                        href=(format!("/{section}/{slug}"))
-                        class=((current == slug).then_some("active"))
-                        aria-current=((current == slug).then_some("page"))
-                    >
-                        (label)
-                    </a>
-                }
-            </nav>
-        </section>
+                " section"
+                <nav aria-label="Nested">
+                    for (slug, label) in PAGES {
+                        <a
+                            href=(format!("/{section}/{slug}"))
+                            class=((current == slug).then_some("active"))
+                            aria-current=((current == slug).then_some("page"))
+                        >
+                            (label)
+                        </a>
+                    }
+                </nav>
+            </section>
+        },
     }?;
 
     view! {
@@ -140,26 +144,30 @@ async fn content_page(cx: &Cx) -> Result {
     let content = path_param::<Content>(cx);
     valid_section(section)?;
     valid_content(content)?;
-    let status = match defer(cx, async {
-        tokio::time::sleep(Duration::from_millis(340)).await;
-        "content page"
-    }) {
-        Deferred::Pending => "loading...",
-        Deferred::Ready(component) => component,
-    };
-    let content_view = view! {
-        <article class="content">
-            <span class="status">(status)</span>
-            <h1>
-                (section_name(section))
-                " / "
-                (content_name(content))
-            </h1>
-            <p>
-                "This page, both navigation bars, and their active states came from the server. "
-                "The browser only reconciled the returned boundaries."
-            </p>
-        </article>
+    let content_view = match defer(
+        cx,
+        topcoat::memoize_global!((section.to_owned(), content.to_owned()), async {
+            tokio::time::sleep(Duration::from_millis(340)).await;
+        }),
+    ) {
+        Deferred::Pending => view! {
+            <article class="content loading">
+                "LOADING CONTENT PAGE - NOTHING TO USE YET"
+            </article>
+        },
+        Deferred::Ready(()) => view! {
+            <article class="content">
+                <h1>
+                    (section_name(section))
+                    " / "
+                    (content_name(content))
+                </h1>
+                <p>
+                    "This page, both navigation bars, and their active states came from the server. "
+                    "The browser only reconciled the returned boundaries."
+                </p>
+            </article>
+        },
     }?;
 
     view! { (boundary(content_view)) }

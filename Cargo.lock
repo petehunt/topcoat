@@ -2901,6 +2901,7 @@ dependencies = [
  "anyhow",
  "anymap3",
  "boxcar",
+ "futures-util",
  "hashbrown 0.17.0",
  "http",
  "pin-project-lite",

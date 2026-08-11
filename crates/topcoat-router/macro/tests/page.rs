@@ -102,7 +102,10 @@ async fn anything() -> Result {
 
 #[page("/stream")]
 async fn stream(cx: &Cx) -> Result {
-    let content = match defer(cx, async { 42_u8 }) {
+    let content = match defer(cx, async {
+        tokio::task::yield_now().await;
+        42_u8
+    }) {
         Deferred::Pending => view! { <p>"loading"</p> },
         Deferred::Ready(value) => view! { <p>(value)</p> },
     }?;
@@ -111,7 +114,10 @@ async fn stream(cx: &Cx) -> Result {
 
 #[page("/stream-redirect")]
 async fn stream_redirect(cx: &Cx) -> Result {
-    match defer(cx, async { redirect("/target") }) {
+    match defer(cx, async {
+        tokio::task::yield_now().await;
+        redirect("/target")
+    }) {
         Deferred::Pending => view! { <p>"waiting"</p> },
         Deferred::Ready(error) => Err(error.into()),
     }
@@ -127,7 +133,10 @@ async fn stream_pending(cx: &Cx) -> Result {
 
 #[page("/stream-error")]
 async fn stream_error(cx: &Cx) -> Result {
-    match defer(cx, async { LateError }) {
+    match defer(cx, async {
+        tokio::task::yield_now().await;
+        LateError
+    }) {
         Deferred::Pending => view! { <p>"waiting"</p> },
         Deferred::Ready(error) => Err(error.into()),
     }
@@ -135,9 +144,15 @@ async fn stream_error(cx: &Cx) -> Result {
 
 #[page("/stream-chain")]
 async fn stream_chain(cx: &Cx) -> Result {
-    let content = match defer(cx, async { 1_u8 }) {
+    let content = match defer(cx, async {
+        tokio::task::yield_now().await;
+        1_u8
+    }) {
         Deferred::Pending => view! { <p>"first pending"</p> },
-        Deferred::Ready(_) => match defer(cx, async { 2_u8 }) {
+        Deferred::Ready(_) => match defer(cx, async {
+            tokio::task::yield_now().await;
+            2_u8
+        }) {
             Deferred::Pending => view! { <p>"second pending"</p> },
             Deferred::Ready(value) => view! {
                 <p>

@@ -18,6 +18,7 @@ build = []
 anyhow.workspace = true
 anymap3.workspace = true
 boxcar.workspace = true
+futures-util.workspace = true
 hashbrown.workspace = true
 http.workspace = true
 pin-project-lite.workspace = true

@@ -6,8 +6,10 @@ use std::{
     panic::Location,
     pin::Pin,
     sync::Mutex,
+    task::{Context, Poll},
 };
 
+use futures_util::task::noop_waker_ref;
 use topcoat_core::context::Cx;
 
 use crate::identity::Identity;
@@ -69,8 +71,10 @@ impl DeferredState {
 /// Registers work that may complete after the first response chunk.
 ///
 /// Each call is identified by its component identity and source location. The
-/// first render starts `future` and returns [`Deferred::Pending`]. Later render
-/// passes return [`Deferred::Ready`] with the completed value.
+/// first render polls `future` once. A future that completes without yielding
+/// returns [`Deferred::Ready`] immediately. A future that yields is registered
+/// and returns [`Deferred::Pending`]; later render passes return
+/// [`Deferred::Ready`] with its completed value.
 ///
 /// # Panics
 ///
@@ -97,16 +101,32 @@ where
         None => {
             entries.insert(key, DeferredEntry::Pending);
             drop(entries);
-            state
-                .futures
-                .lock()
-                .expect("deferred future lock poisoned")
-                .push(Box::pin(async move {
-                    let value = future.await;
-                    let value: Box<dyn Any + Send + Sync> = Box::new(value);
-                    (key, value)
-                }));
-            Deferred::Pending
+            let mut future = Box::pin(future);
+            match future
+                .as_mut()
+                .poll(&mut Context::from_waker(noop_waker_ref()))
+            {
+                Poll::Ready(value) => {
+                    state
+                        .entries
+                        .lock()
+                        .expect("deferred state lock poisoned")
+                        .insert(key, DeferredEntry::Ready(Box::new(value.clone())));
+                    Deferred::Ready(value)
+                }
+                Poll::Pending => {
+                    state
+                        .futures
+                        .lock()
+                        .expect("deferred future lock poisoned")
+                        .push(Box::pin(async move {
+                            let value = future.await;
+                            let value: Box<dyn Any + Send + Sync> = Box::new(value);
+                            (key, value)
+                        }));
+                    Deferred::Pending
+                }
+            }
         }
     }
 }
@@ -124,4 +144,36 @@ fn deferred_key(location: &'static Location<'static>) -> DeferredKey {
     location.column().hash(&mut hasher);
     let site = u128::from(hasher.finish());
     DeferredKey(Identity::current().hash() ^ (site << 64) ^ site)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn immediate(cx: &Cx) -> Deferred<u32> {
+        defer(cx, async { 42 })
+    }
+
+    fn never(cx: &Cx) -> Deferred<()> {
+        defer(cx, std::future::pending())
+    }
+
+    #[test]
+    fn immediately_ready_futures_never_enter_pending() {
+        let cx = Cx::default();
+
+        assert_eq!(immediate(&cx), Deferred::Ready(42));
+        assert_eq!(immediate(&cx), Deferred::Ready(42));
+        assert!(!deferred_state(&cx).has_pending());
+        assert!(deferred_state(&cx).take_futures().is_empty());
+    }
+
+    #[test]
+    fn yielding_futures_are_registered_as_pending() {
+        let cx = Cx::default();
+
+        assert_eq!(never(&cx), Deferred::Pending);
+        assert!(deferred_state(&cx).has_pending());
+        assert_eq!(deferred_state(&cx).take_futures().len(), 1);
+    }
 }
