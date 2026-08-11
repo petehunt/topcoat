@@ -234,6 +234,25 @@ async fn deferred_pages_stream_a_boundary_swap() {
 }
 
 #[tokio::test]
+async fn compressed_deferred_pages_finish_the_body_stream() {
+    let router = Router::builder().page(stream).build();
+    let request = http::Request::builder()
+        .uri("/stream")
+        .header(http::header::ACCEPT_ENCODING, "gzip")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.handle(request).await;
+
+    assert_eq!(response.headers()[http::header::CONTENT_ENCODING], "gzip");
+    assert!(
+        !to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn redirects_after_streaming_become_navigation_instructions() {
     let router = Router::builder().page(stream_redirect).build();
     let (status, body) = send(&router, "/stream-redirect").await;

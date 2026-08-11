@@ -240,7 +240,7 @@ impl StreamingPage {
                 .map(|chunk| (Ok::<_, BoxError>(Frame::data(Bytes::from(chunk))), state))
         });
         let mut response = Html(String::new()).into_response(cx)?;
-        *response.body_mut() = Body::new(StreamBody::new(first.chain(rest)));
+        *response.body_mut() = Body::new(StreamBody::new(first.chain(rest).fuse()));
         if let Some(status) = status {
             *response.status_mut() = status;
         }
