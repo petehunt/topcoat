@@ -253,6 +253,46 @@ async fn compressed_deferred_pages_finish_the_body_stream() {
 }
 
 #[tokio::test]
+async fn navigation_requests_receive_only_server_reconciliation_chunks() {
+    let router = Router::builder().page(stream).build();
+    let (_, initial) = send(&router, "/stream").await;
+    let marker = initial
+        .split_once("<!--topcoat-boundary ")
+        .unwrap()
+        .1
+        .split_once("-->")
+        .unwrap()
+        .0;
+    let id = marker.split_whitespace().next().unwrap();
+    let request = http::Request::builder()
+        .uri("/stream")
+        .header("x-topcoat-boundaries", format!("{id}=0000000000000000"))
+        .body(Body::empty())
+        .unwrap();
+    let response = router.handle(request).await;
+    assert!(
+        response
+            .headers()
+            .get_all(http::header::VARY)
+            .iter()
+            .any(|value| value == "x-topcoat-boundaries")
+    );
+    let body = String::from_utf8(
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+
+    assert!(body.contains("data-topcoat-navigation"));
+    assert!(body.contains("data-topcoat-swap"));
+    assert!(body.contains("data-topcoat-hash"));
+    assert!(!body.contains("data-topcoat-stream"));
+    assert!(!body.contains("<!DOCTYPE"));
+}
+
+#[tokio::test]
 async fn redirects_after_streaming_become_navigation_instructions() {
     let router = Router::builder().page(stream_redirect).build();
     let (status, body) = send(&router, "/stream-redirect").await;

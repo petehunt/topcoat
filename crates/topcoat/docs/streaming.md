@@ -35,6 +35,12 @@ The deferred output must be cloneable. For fallible work, use an error type that
 
 The connection remains open until all deferred work reachable from the page completes. Response middleware must preserve streaming body frames; middleware that buffers the complete body also delays the first paint.
 
+## Server-driven navigation
+
+Add `data-topcoat-navigation` to the document's `<html>` element to make same-origin links use reconciliation instead of a full page load. The browser reads the server-issued hash from each boundary marker and sends the current set in the `X-Topcoat-Boundaries` request header. The server renders the destination route, compares its boundaries with those hashes, and returns only changed `<template>` instructions. Active-link state and all other route decisions still come from the server. The browser only applies the returned boundaries and updates history.
+
+Navigation responses vary on `X-Topcoat-Boundaries`, so shared caches do not mix a full document with a reconciliation response. A missing boundary or a changed boundary structure falls back to a root swap.
+
 [`Cx`]: crate::context::Cx
 [`defer`]: crate::view::defer
 [`Deferred::Pending`]: crate::view::Deferred::Pending

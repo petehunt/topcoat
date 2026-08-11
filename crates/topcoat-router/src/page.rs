@@ -17,7 +17,10 @@ use crate::{
     Body, BoxError, IntoPath, Methods, OwnedMethods, Path, Route, RouteFuture,
     content::Html,
     error::{RedirectError, respond},
-    reconcile::{SWAP_SCRIPT, Snapshot, redirect_template, swap_template},
+    reconcile::{
+        SWAP_SCRIPT, Snapshot, client_hashes, navigation_template, redirect_template, swap_template,
+    },
+    request::headers,
     response::{IntoResponse, Response},
 };
 
@@ -193,14 +196,27 @@ impl Route for PageWithLayouts {
             let body = crate::body::to_bytes(body, crate::body_limit(cx)).await?;
             let view = self.render_view(cx, body.clone()).await?;
             let deferred = deferred_state(cx);
-            if !deferred.has_pending() {
-                return view.into_response(cx);
-            }
-
             let rendered = view.render_response(cx);
-            let snapshot = Snapshot::parse(rendered.html.clone());
-            let mut first = rendered.html;
-            first.push_str(SWAP_SCRIPT);
+            let snapshot = Snapshot::parse(rendered.html);
+            let navigation = headers(cx)
+                .get("x-topcoat-boundaries")
+                .and_then(|value| value.to_str().ok())
+                .map(client_hashes);
+            let mut first = if let Some(hashes) = navigation.as_ref() {
+                let mut chunk = snapshot.reconcile_hashes(hashes);
+                chunk.push_str(&navigation_template(snapshot.title()));
+                chunk
+            } else {
+                snapshot.html().to_owned()
+            };
+            if navigation.is_none()
+                && (deferred.has_pending() || first.contains("data-topcoat-navigation"))
+            {
+                first.push_str(SWAP_SCRIPT);
+            }
+            if !deferred.has_pending() {
+                return fragment_response(first, rendered.status_code, rendered.headers, cx);
+            }
             let stream = StreamingPage {
                 page: self.clone(),
                 cx: cx.detach(),
@@ -212,6 +228,24 @@ impl Route for PageWithLayouts {
             stream.response(first, rendered.status_code, rendered.headers, cx)
         })
     }
+}
+
+fn fragment_response(
+    html: String,
+    status: Option<http::StatusCode>,
+    headers: http::HeaderMap,
+    cx: &Cx,
+) -> Result<Response> {
+    let mut response = Html(html).into_response(cx)?;
+    if let Some(status) = status {
+        *response.status_mut() = status;
+    }
+    response.headers_mut().extend(headers);
+    response.headers_mut().append(
+        http::header::VARY,
+        http::HeaderValue::from_static("x-topcoat-boundaries"),
+    );
+    Ok(response)
 }
 
 struct StreamingPage {
@@ -245,6 +279,10 @@ impl StreamingPage {
             *response.status_mut() = status;
         }
         response.headers_mut().extend(headers);
+        response.headers_mut().append(
+            http::header::VARY,
+            http::HeaderValue::from_static("x-topcoat-boundaries"),
+        );
         Ok(response)
     }
 
