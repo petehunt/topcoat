@@ -1,7 +1,7 @@
 use topcoat::{
     Result,
     context::Cx,
-    view::{View, component, view},
+    view::{Component, View, component, view},
 };
 
 // `view!` lowers component calls to expressions that reference `__cx`. In real
@@ -107,6 +107,31 @@ async fn component_without_args_renders() {
     let result: Result = view! { no_args_component() };
 
     assert_eq!(result.unwrap().render(__cx), "<p>static</p>");
+}
+
+#[component(rerender)]
+async fn reusable_greeting() -> Result {
+    let name = String::from("Ada");
+    {
+        let name = name.clone();
+        view! {
+            <p>
+                "Hello, "
+                (name)
+            </p>
+        }
+    }
+}
+
+#[tokio::test]
+async fn prepared_component_renderer_can_be_called_more_than_once() {
+    let cx = empty_cx();
+    let render = Component::prepare(reusable_greeting, &cx, ReusableGreetingProps {})
+        .await
+        .unwrap();
+
+    assert_eq!(render().await.unwrap().render(&cx), "<p>Hello, Ada</p>");
+    assert_eq!(render().await.unwrap().render(&cx), "<p>Hello, Ada</p>");
 }
 
 #[component]

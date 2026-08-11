@@ -7,13 +7,16 @@ pub use item::*;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote, quote_spanned};
 use syn::{
-    FnArg, GenericParam, Lifetime, Pat, ReturnType, Type, TypeParam, TypeReference,
+    Expr, ExprMacro, FnArg, GenericParam, Lifetime, Pat, ReturnType, Stmt, Type, TypeParam,
+    TypeReference,
     ext::IdentExt,
     parse_quote,
     spanned::Spanned,
     visit_mut::{self, VisitMut},
 };
-use topcoat_core_grammar::paths::{topcoat_context, topcoat_view, topcoat_view_macro};
+use topcoat_core_grammar::paths::{
+    topcoat_context, topcoat_error, topcoat_view, topcoat_view_macro,
+};
 
 use crate::component::{ComponentAttr, ComponentItem};
 
@@ -85,10 +88,47 @@ impl ToTokens for Component {
                 pat_type.attrs.clear();
             }
         }
+        let render_item = item.clone();
 
         let ReturnType::Type(_, return_ty) = &item.sig.output else {
             unreachable!("validated in Parse");
         };
+        let return_ty = return_ty.clone();
+
+        if self.attr.rerender() {
+            let render = match item.block.stmts.pop() {
+                Some(Stmt::Expr(render, None)) => render,
+                Some(Stmt::Macro(statement)) if statement.semi_token.is_none() => {
+                    Expr::Macro(ExprMacro {
+                        attrs: statement.attrs,
+                        mac: statement.mac,
+                    })
+                }
+                _ => {
+                    quote_spanned! {item.block.span()=>
+                        compile_error!("components must end with an expression that renders a view");
+                    }
+                    .to_tokens(tokens);
+                    return;
+                }
+            };
+            item.block.stmts.push(Stmt::Expr(
+                parse_quote! {
+                    ::core::result::Result::Ok(
+                        async move || #render
+                    )
+                },
+                None,
+            ));
+            item.attrs
+                .push(parse_quote! { #[allow(clippy::unused_async)] });
+            item.sig.output = parse_quote! {
+                -> #topcoat_error::Result<
+                    impl ::core::ops::AsyncFn() -> #return_ty
+                        + ::core::marker::Send
+                >
+            };
+        }
 
         let mut fields = Vec::new();
         let mut args = Vec::new();
@@ -180,6 +220,64 @@ impl ToTokens for Component {
         // the body that awaits the next component's, looping back around.
         // Refining the trait's opaque return type to the concrete boxed one is
         // deliberate and invisible to `view!` callers.
+        let prepare_call = if self.attr.rerender() {
+            quote! { #ident(cx, #(#args),*).await }
+        } else {
+            quote! {
+                {
+                    let __view = #ident(cx, #(#args),*).await?;
+                    ::core::result::Result::Ok(async move || {
+                        ::core::result::Result::Ok(::core::clone::Clone::clone(&__view))
+                    })
+                }
+            }
+        };
+        let prepare = if self.attr.boxed() {
+            quote! {
+                #[allow(refining_impl_trait)]
+                fn prepare<'__cx>(
+                    self,
+                    cx: &'__cx #topcoat_context::Cx,
+                    props: Self::Props,
+                ) -> ::core::pin::Pin<::std::boxed::Box<
+                    dyn ::core::future::Future<
+                            Output = #topcoat_error::Result<
+                                impl ::core::ops::AsyncFn() -> #return_ty
+                                    + ::core::marker::Send,
+                            >,
+                        >
+                        + ::core::marker::Send
+                        + '__cx,
+                >>
+                where
+                    Self: '__cx,
+                    Self::Props: '__cx,
+                {
+                    ::std::boxed::Box::pin(async move {
+                        #item
+                        #prepare_call
+                    })
+                }
+            }
+        } else {
+            quote! {
+                async fn prepare<'__cx>(
+                    self,
+                    cx: &'__cx #topcoat_context::Cx,
+                    props: Self::Props,
+                ) -> #topcoat_error::Result<
+                    impl ::core::ops::AsyncFn() -> #return_ty
+                        + ::core::marker::Send
+                >
+                where
+                    Self: '__cx,
+                    Self::Props: '__cx,
+                {
+                    #item
+                    #prepare_call
+                }
+            }
+        };
         let render = if self.attr.boxed() {
             quote! {
                 #[allow(refining_impl_trait)]
@@ -197,7 +295,7 @@ impl ToTokens for Component {
                     Self::Props: '__cx,
                 {
                     ::std::boxed::Box::pin(async move {
-                        #item
+                        #render_item
                         #ident(cx, #(#args),*).await
                     })
                 }
@@ -213,7 +311,7 @@ impl ToTokens for Component {
                     Self: '__cx,
                     Self::Props: '__cx,
                 {
-                    #item
+                    #render_item
                     #ident(cx, #(#args),*).await
                 }
             }
@@ -230,6 +328,7 @@ impl ToTokens for Component {
             impl #impl_generics #topcoat_view::Component for #ident #ty_generics #where_clause {
                 type Props = #props_ident #ty_generics;
 
+                #prepare
                 #render
             }
 

@@ -1,36 +1,55 @@
-use syn::parse::{Parse, ParseStream};
+use syn::{
+    Token,
+    parse::{Parse, ParseStream},
+    punctuated::Punctuated,
+};
 
-mod kw {
-    use syn::custom_keyword;
-
-    custom_keyword!(boxed);
-}
-
-/// Arguments passed to the `#[component]` attribute itself. The only
-/// recognized argument is `boxed`, which makes the generated `render` return
-/// a heap-allocated, type-erased future instead of an opaque one. Recursive
-/// components need this on at least one component in the cycle.
+/// Arguments passed to the `#[component]` attribute itself.
 pub struct ComponentAttr {
-    boxed: Option<kw::boxed>,
+    boxed: bool,
+    rerender: bool,
 }
 
 impl ComponentAttr {
     /// Whether the generated `render` returns a boxed future.
     #[must_use]
     pub fn boxed(&self) -> bool {
-        self.boxed.is_some()
+        self.boxed
+    }
+
+    /// Whether async setup is split from a reusable final render expression.
+    #[must_use]
+    pub fn rerender(&self) -> bool {
+        self.rerender
     }
 }
 
 impl Parse for ComponentAttr {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        Ok(Self {
-            boxed: if input.is_empty() {
-                None
+        let args = Punctuated::<syn::Ident, Token![,]>::parse_terminated(input)?;
+        let mut attr = Self {
+            boxed: false,
+            rerender: false,
+        };
+        for arg in args {
+            if arg == "boxed" {
+                if attr.boxed {
+                    return Err(syn::Error::new(arg.span(), "duplicate `boxed` argument"));
+                }
+                attr.boxed = true;
+            } else if arg == "rerender" {
+                if attr.rerender {
+                    return Err(syn::Error::new(arg.span(), "duplicate `rerender` argument"));
+                }
+                attr.rerender = true;
             } else {
-                Some(input.parse()?)
-            },
-        })
+                return Err(syn::Error::new(
+                    arg.span(),
+                    "expected `boxed` or `rerender`",
+                ));
+            }
+        }
+        Ok(attr)
     }
 }
 
@@ -49,6 +68,7 @@ mod tests {
     fn parses_empty_arguments() {
         let attr: ComponentAttr = syn::parse_str("").unwrap();
         assert!(!attr.boxed());
+        assert!(!attr.rerender());
     }
 
     #[test]
@@ -59,11 +79,18 @@ mod tests {
 
     #[test]
     fn rejects_unknown_argument() {
-        assert!(parse_err("pinned").contains("expected `boxed`"));
+        assert!(parse_err("pinned").contains("expected `boxed` or `rerender`"));
     }
 
     #[test]
     fn rejects_trailing_tokens() {
-        parse_err("boxed, extra");
+        assert!(parse_err("boxed, extra").contains("expected `boxed` or `rerender`"));
+    }
+
+    #[test]
+    fn parses_rerender_with_boxed() {
+        let attr: ComponentAttr = syn::parse_str("rerender, boxed").unwrap();
+        assert!(attr.rerender());
+        assert!(attr.boxed());
     }
 }

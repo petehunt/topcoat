@@ -110,7 +110,7 @@ use topcoat::{
     view::{Deferred, component, defer, view},
 };
 
-#[component]
+#[component(rerender)]
 async fn drink_grid(cx: &Cx) -> Result {
     match defer(cx, drinks(cx)) {
         Deferred::Pending => view! {
@@ -136,6 +136,54 @@ There is no fallback parameter, no lazy closure, and no new control flow constru
 A `defer` call is identified across renders by the component identity of the enclosing body combined with the call site, obtained via `#[track_caller]`. The identity system's existing rules apply unchanged: a `defer` reached through an unkeyed repeated invocation has an ambiguous identity and fails with the error message naming the invocation that needs a `key:`. A `defer` call that itself repeats inside a loop within one component body needs its own key; the API should offer a keyed variant for that case.
 
 ### Render Passes
+
+Re-running a page does not need to re-run every component's async setup. The
+component macro can split setup from the final render expression and expose the
+latter as a reusable async closure. Conceptually, this component:
+
+```rust
+#[component(rerender)]
+async fn user_profile(cx: &Cx) -> Result {
+    let user = User::get(user_id(cx)).await?;
+
+    if user.admin {
+        view! { <h1>"ADMIN: " (user.name)</h1> }
+    } else {
+        view! { <h1>(user.name)</h1> }
+    }
+}
+```
+
+is prepared as if its tail were wrapped in `async move || { ... }`. A render
+pass awaits the setup once, then may call the returned body for the initial
+render and later passes. The closure is an `AsyncFn`, rather than an
+`AsyncFnOnce`, so every call observes the same prepared values.
+
+That requirement deliberately has normal Rust ownership consequences. Moving
+a captured value out of the final expression makes the generated closure only
+implement `AsyncFnOnce` and produces a compile error. A component that needs to
+consume an owned value on every render must clone it inside the final block:
+
+```rust
+#[component]
+async fn user_profile(cx: &Cx) -> Result {
+    let user = User::get(user_id(cx)).await?;
+
+    {
+        let name = user.name.clone();
+        view! { <h1>(name)</h1> }
+    }
+}
+```
+
+This can be surprising for a component that is only ever rendered once, and
+whether a component participates in a second pass is a property of its callers
+and request. The prototype therefore makes the split explicit with
+`#[component(rerender)]`. An ordinary `#[component]` prepares a reusable closure
+over its already-rendered `View`, preserving today's ownership behavior while
+giving the render engine one uniform interface. The mode can become the default
+later if real-world migration experience shows that the stronger ownership
+contract is worth imposing on every component.
 
 When a page render completes and no `defer` was called, nothing changes: the response is built and sent exactly as today. Streaming costs nothing unless a page opts in.
 
