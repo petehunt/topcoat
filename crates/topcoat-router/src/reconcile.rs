@@ -6,7 +6,21 @@ use std::{
 const START: &str = "<!--topcoat-boundary ";
 const END: &str = "<!--/topcoat-boundary ";
 
-pub(crate) const SWAP_SCRIPT: &str = r"<script data-topcoat-stream>(function(){function comments(){var w=document.createTreeWalker(document,NodeFilter.SHOW_COMMENT),m=new Map(),n;while(n=w.nextNode()){var t=n.data;if(t.startsWith('topcoat-boundary '))m.set('s:'+t.slice(17),n);else if(t.startsWith('/topcoat-boundary '))m.set('e:'+t.slice(18),n)}return m}function apply(t){var r=t.dataset.topcoatRedirect;if(r){location.assign(r);t.remove();return}var id=t.dataset.topcoatSwap;if(!id)return;if(id==='root'){var d=new DOMParser().parseFromString(t.innerHTML,'text/html');document.documentElement.innerHTML=d.documentElement.innerHTML;globalThis.__topcoatScan?.(document.body,null,null);return}var m=comments(),s=m.get('s:'+id),e=m.get('e:'+id);if(!s||!e)return;for(var n=s.nextSibling;n&&n!==e;){var x=n.nextSibling;n.remove();n=x}e.before(t.content.cloneNode(true));globalThis.__topcoatScan?.(s.parentNode,s,e);t.remove()}new MutationObserver(function(rs){for(var r of rs)for(var n of r.addedNodes){if(n.nodeType===1&&n.matches('template[data-topcoat-swap],template[data-topcoat-redirect]'))apply(n);if(n.querySelectorAll)n.querySelectorAll('template[data-topcoat-swap],template[data-topcoat-redirect]').forEach(apply)}}).observe(document.documentElement,{childList:true,subtree:true});document.querySelectorAll('template[data-topcoat-swap],template[data-topcoat-redirect]').forEach(apply)})();</script>";
+pub(crate) const SWAP_SCRIPT: &str = r"<script data-topcoat-stream>(function(){
+var selector='template[data-topcoat-swap],template[data-topcoat-redirect]';
+function comments(root){var w=document.createTreeWalker(root,NodeFilter.SHOW_COMMENT),m=new Map(),n;while(n=w.nextNode()){var t=n.data;if(t.startsWith('topcoat-boundary '))m.set('s:'+t.slice(17),n);else if(t.startsWith('/topcoat-boundary '))m.set('e:'+t.slice(18),n)}return m}
+function depths(root){var w=document.createTreeWalker(root,NodeFilter.SHOW_COMMENT),stack=[],m=new Map(),n;while(n=w.nextNode()){var t=n.data;if(t.startsWith('topcoat-boundary ')){var id=t.slice(17);m.set(id,stack.length);stack.push(id)}else if(t.startsWith('/topcoat-boundary ')){var id=t.slice(18),index=stack.lastIndexOf(id);if(index>=0)stack.splice(index,1)}}return m}
+function content(start,end){var box=document.createElement('div');for(var n=start.nextSibling;n&&n!==end;n=n.nextSibling)box.append(n.cloneNode(true));return box.innerHTML}
+function replace(start,end,fragment){for(var n=start.nextSibling;n&&n!==end;){var next=n.nextSibling;n.remove();n=next}end.before(fragment);globalThis.__topcoatScan?.(start.parentNode,start,end)}
+function apply(root,template){var redirect=template.dataset.topcoatRedirect;if(redirect){location.assign(redirect);template.remove();return root}var id=template.dataset.topcoatSwap;if(!id)return root;if(id==='root'){var next=new DOMParser().parseFromString(template.innerHTML,'text/html');if(root===document){document.documentElement.innerHTML=next.documentElement.innerHTML;globalThis.__topcoatScan?.(document.body,null,null);return root}return next}var map=comments(root),start=map.get('s:'+id),end=map.get('e:'+id);if(start&&end)replace(start,end,template.content.cloneNode(true));template.remove();return root}
+function settle(root){var template;while((template=root.querySelector(selector)))root=apply(root,template);root.querySelectorAll('script[data-topcoat-stream]').forEach(function(script){script.remove()});return root}
+function reconcile(next){var currentMap=comments(document),nextMap=comments(next),currentIds=[],nextIds=[];currentMap.forEach(function(_,key){if(key.startsWith('s:'))currentIds.push(key.slice(2))});nextMap.forEach(function(_,key){if(key.startsWith('s:'))nextIds.push(key.slice(2))});currentIds.sort();nextIds.sort();if(currentIds.join()!=nextIds.join()){document.documentElement.innerHTML=next.documentElement.innerHTML;globalThis.__topcoatScan?.(document.body,null,null);return}var nesting=depths(next);nextIds.sort(function(a,b){return nesting.get(b)-nesting.get(a)});for(var id of nextIds){var start=currentMap.get('s:'+id),end=currentMap.get('e:'+id),nextStart=nextMap.get('s:'+id),nextEnd=nextMap.get('e:'+id);if(content(start,end)!==content(nextStart,nextEnd)){var fragment=document.createDocumentFragment();for(var n=nextStart.nextSibling;n&&n!==nextEnd;n=n.nextSibling)fragment.append(n.cloneNode(true));replace(start,end,fragment)}}document.title=next.title}
+async function navigate(url,push){document.documentElement.dataset.topcoatNavigating='';try{var response=await fetch(url,{headers:{Accept:'text/html'}});if(!response.ok)throw new Error('navigation failed: '+response.status);var next=settle(new DOMParser().parseFromString(await response.text(),'text/html'));reconcile(next);if(push)history.pushState(null,'',response.url);else if(response.url!==location.href)history.replaceState(null,'',response.url);scrollTo(0,0)}catch(error){location.assign(url)}finally{delete document.documentElement.dataset.topcoatNavigating}}
+function enabled(){return document.documentElement.hasAttribute('data-topcoat-navigation')}
+document.addEventListener('click',function(event){if(!enabled()||event.defaultPrevented||event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey)return;var anchor=event.target.closest('a[href]');if(!anchor||anchor.target||anchor.hasAttribute('download'))return;var url=new URL(anchor.href,location.href);if(url.origin!==location.origin||url.protocol!=='http:'&&url.protocol!=='https:'||url.pathname===location.pathname&&url.search===location.search)return;event.preventDefault();navigate(url.href,true)});
+addEventListener('popstate',function(){if(enabled())navigate(location.href,false)});
+new MutationObserver(function(records){for(var record of records)for(var node of record.addedNodes){if(node.nodeType===1&&node.matches(selector))apply(document,node);if(node.querySelectorAll)node.querySelectorAll(selector).forEach(function(template){apply(document,template)})}}).observe(document.documentElement,{childList:true,subtree:true});document.querySelectorAll(selector).forEach(function(template){apply(document,template)});
+})();</script>";
 
 #[derive(Debug, Clone)]
 pub(crate) struct Snapshot {
@@ -211,5 +225,15 @@ mod tests {
         let next = Snapshot::parse("<!--topcoat-boundary p-->before<!--topcoat-boundary c-->new<!--/topcoat-boundary c-->after<!--/topcoat-boundary p-->".into());
         let (_, chunk) = first.reconcile(next);
         assert_eq!(chunk, "<template data-topcoat-swap=\"c\">new</template>");
+    }
+
+    #[test]
+    fn swap_runtime_supports_server_driven_navigation() {
+        assert!(SWAP_SCRIPT.contains("data-topcoat-navigation"));
+        assert!(SWAP_SCRIPT.contains("history.pushState"));
+        assert!(SWAP_SCRIPT.contains("fetch(url"));
+        assert!(SWAP_SCRIPT.contains("root===document"));
+        assert!(SWAP_SCRIPT.contains("depths(next)"));
+        assert!(!SWAP_SCRIPT.contains("pathname.split"));
     }
 }

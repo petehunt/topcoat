@@ -39,6 +39,7 @@ members = [
     "examples/asset",
     "examples/context",
     "examples/cookie",
+    "examples/client-navigation",
     "examples/datastar",
     "examples/error",
     "examples/font",
