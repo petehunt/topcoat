@@ -27,7 +27,8 @@ topcoat = { workspace = true, features = ["router"] }
 serde = { workspace = true, features = ["derive"] }
 uuid = { workspace = true }
 http.workspace = true
-tokio = { workspace = true, features = ["macros", "rt"] }
+http-body-util.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
 
 [lints]
 workspace = true

@@ -2,9 +2,10 @@ mod context_map;
 mod id;
 
 use std::{
-    any::Any,
+    any::{Any, TypeId},
+    collections::HashMap,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -48,6 +49,7 @@ impl Cx {
                 request_context,
                 memoize_cache: MemoizeCache::new(),
                 abort_store: AbortStore::new(),
+                shared_context: SharedContext::default(),
                 sealed: AtomicBool::new(false),
             }),
         }
@@ -136,7 +138,29 @@ struct CxInner {
     request_context: ContextMap,
     memoize_cache: MemoizeCache,
     abort_store: AbortStore,
+    shared_context: SharedContext,
     sealed: AtomicBool,
+}
+
+#[derive(Debug, Default)]
+struct SharedContext {
+    values: Mutex<HashMap<TypeId, Box<dyn Any + Send + Sync>>>,
+}
+
+impl SharedContext {
+    fn get_or_default<T>(&self) -> Arc<T>
+    where
+        T: Default + Send + Sync + 'static,
+    {
+        let mut values = self.values.lock().expect("shared context lock poisoned");
+        let value = values
+            .entry(TypeId::of::<T>())
+            .or_insert_with(|| Box::new(Arc::<T>::default()));
+        value
+            .downcast_ref::<Arc<T>>()
+            .expect("shared context type id stored the wrong type")
+            .clone()
+    }
 }
 
 /// Assembles a [`Cx`] from scratch, for tests.
@@ -195,6 +219,16 @@ pub fn memoize_cache(cx: &Cx) -> &MemoizeCache {
 #[doc(hidden)]
 pub fn abort_store(cx: &Cx) -> &AbortStore {
     &cx.inner.abort_store
+}
+
+#[inline]
+#[must_use]
+#[doc(hidden)]
+pub fn shared_context<T>(cx: &Cx) -> Arc<T>
+where
+    T: Default + Send + Sync + 'static,
+{
+    cx.inner.shared_context.get_or_default()
 }
 
 #[cfg(test)]

@@ -1,10 +1,24 @@
 use std::{borrow::Cow, pin::Pin};
 
-use topcoat_core::{context::Cx, error::Result};
-use topcoat_view::View;
+use bytes::Bytes;
+use futures_util::{
+    StreamExt,
+    stream::{self, FuturesUnordered},
+};
+use http_body::Frame;
+use http_body_util::StreamBody;
+use topcoat_core::{
+    context::Cx,
+    error::{Error, Result},
+};
+use topcoat_view::{DeferredFuture, DeferredState, View, deferred_state};
 
 use crate::{
-    Body, IntoPath, Methods, OwnedMethods, Path, Route, RouteFuture, response::IntoResponse,
+    Body, BoxError, IntoPath, Methods, OwnedMethods, Path, Route, RouteFuture,
+    content::Html,
+    error::{RedirectError, respond},
+    reconcile::{SWAP_SCRIPT, Snapshot, redirect_template, swap_template},
+    response::{IntoResponse, Response},
 };
 
 /// The async render function backing a [`PageFn`].
@@ -139,6 +153,7 @@ impl LayoutFn {
 inventory::collect!(LayoutFn);
 
 /// A [`PageFn`] paired with the [`LayoutFn`]s that wrap it.
+#[derive(Clone)]
 pub struct PageWithLayouts {
     page: PageFn,
     /// The matching layouts, ordered by ascending path length (outermost first).
@@ -154,6 +169,14 @@ impl PageWithLayouts {
     pub fn new(page: PageFn, layouts: Vec<LayoutFn>) -> Self {
         Self { page, layouts }
     }
+
+    async fn render_view(&self, cx: &Cx, body: Bytes) -> Result<View> {
+        let mut slot = self.page.render(cx, Body::from(body)).await;
+        for layout in self.layouts.iter().rev() {
+            slot = layout.render(cx, slot).await;
+        }
+        slot
+    }
 }
 
 impl Route for PageWithLayouts {
@@ -167,11 +190,97 @@ impl Route for PageWithLayouts {
 
     fn handle<'cx>(&'cx self, cx: &'cx Cx, body: Body) -> RouteFuture<'cx> {
         Box::pin(async move {
-            let mut slot = self.page.render(cx, body).await;
-            for layout in self.layouts.iter().rev() {
-                slot = layout.render(cx, slot).await;
+            let body = crate::body::to_bytes(body, crate::body_limit(cx)).await?;
+            let view = self.render_view(cx, body.clone()).await?;
+            let deferred = deferred_state(cx);
+            if !deferred.has_pending() {
+                return view.into_response(cx);
             }
-            slot.into_response(cx)
+
+            let rendered = view.render_response(cx);
+            let snapshot = Snapshot::parse(rendered.html.clone());
+            let mut first = rendered.html;
+            first.push_str(SWAP_SCRIPT);
+            let stream = StreamingPage {
+                page: self.clone(),
+                cx: cx.detach(),
+                body,
+                deferred,
+                pending: FuturesUnordered::new(),
+                snapshot,
+            };
+            stream.response(first, rendered.status_code, rendered.headers, cx)
         })
+    }
+}
+
+struct StreamingPage {
+    page: PageWithLayouts,
+    cx: Cx,
+    body: Bytes,
+    deferred: std::sync::Arc<DeferredState>,
+    pending: FuturesUnordered<DeferredFuture>,
+    snapshot: Snapshot,
+}
+
+impl StreamingPage {
+    fn response(
+        mut self,
+        first: String,
+        status: Option<http::StatusCode>,
+        headers: http::HeaderMap,
+        cx: &Cx,
+    ) -> Result<Response> {
+        self.pending.extend(self.deferred.take_futures());
+        let first = stream::once(async move { Ok::<_, BoxError>(Frame::data(Bytes::from(first))) });
+        let rest = stream::unfold(self, |mut state| async move {
+            state
+                .next_chunk()
+                .await
+                .map(|chunk| (Ok::<_, BoxError>(Frame::data(Bytes::from(chunk))), state))
+        });
+        let mut response = Html(String::new()).into_response(cx)?;
+        *response.body_mut() = Body::new(StreamBody::new(first.chain(rest)));
+        if let Some(status) = status {
+            *response.status_mut() = status;
+        }
+        response.headers_mut().extend(headers);
+        Ok(response)
+    }
+
+    async fn next_chunk(&mut self) -> Option<String> {
+        loop {
+            let (key, value) = self.pending.next().await?;
+            self.deferred.resolve(key, value);
+            let chunk = match self.page.render_view(&self.cx, self.body.clone()).await {
+                Ok(view) => {
+                    let next = Snapshot::parse(view.render_response(&self.cx).html);
+                    let (snapshot, chunk) = self.snapshot.reconcile(next);
+                    self.snapshot = snapshot;
+                    chunk
+                }
+                Err(error) => self.error_chunk(error).await,
+            };
+            self.pending.extend(self.deferred.take_futures());
+            if !chunk.is_empty() {
+                return Some(chunk);
+            }
+        }
+    }
+
+    async fn error_chunk(&mut self, error: Error) -> String {
+        match error.downcast::<RedirectError>() {
+            Ok(redirect) => redirect.location().to_str().map_or_else(
+                |_| swap_template("root", "internal server error"),
+                redirect_template,
+            ),
+            Err(error) => {
+                let response = respond(&self.cx, error);
+                let body = crate::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap_or_else(|_| Bytes::from_static(b"internal server error"));
+                swap_template("root", &String::from_utf8_lossy(&body))
+            }
+        }
     }
 }

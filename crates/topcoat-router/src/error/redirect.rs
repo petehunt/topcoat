@@ -64,7 +64,7 @@ pub fn redirect_permanent(uri: &str) -> RedirectError {
 /// from an `Option` / `Result` via [`RouterErrorExt`](crate::error::RouterErrorExt).
 /// For the Post/Redirect/Get pattern, where the redirect is a *successful*
 /// response returned through `Ok`, reach for [`see_other`] instead.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RedirectError {
     status: StatusCode,
     location: HeaderValue,
@@ -82,6 +82,12 @@ impl RedirectError {
             status,
             location: HeaderValue::try_from(uri).expect("redirect uri is not a valid header value"),
         }
+    }
+
+    /// Returns the redirect target.
+    #[must_use]
+    pub fn location(&self) -> &HeaderValue {
+        &self.location
     }
 }
 

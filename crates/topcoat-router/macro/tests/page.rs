@@ -1,9 +1,10 @@
+use http_body_util::BodyExt;
 use serde::Deserialize;
 use topcoat::{
     Result,
     context::Cx,
-    router::{Body, Router, content::Form, page, request::uri, to_bytes},
-    view::view,
+    router::{Body, Router, content::Form, error::redirect, page, request::uri, to_bytes},
+    view::{Deferred, boundary, defer, view},
 };
 
 mod common;
@@ -31,6 +32,17 @@ async fn home() -> Result {
 struct Search {
     q: String,
 }
+
+#[derive(Debug, Clone)]
+struct LateError;
+
+impl std::fmt::Display for LateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("late failure")
+    }
+}
+
+impl std::error::Error for LateError {}
 
 // A page that reads a request body through a destructuring pattern.
 #[page("/search")]
@@ -86,6 +98,56 @@ async fn either() -> Result {
 #[page(* "/anything")]
 async fn anything() -> Result {
     view! { <p>"anything"</p> }
+}
+
+#[page("/stream")]
+async fn stream(cx: &Cx) -> Result {
+    let content = match defer(cx, async { 42_u8 }) {
+        Deferred::Pending => view! { <p>"loading"</p> },
+        Deferred::Ready(value) => view! { <p>(value)</p> },
+    }?;
+    view! { (boundary(content)) }
+}
+
+#[page("/stream-redirect")]
+async fn stream_redirect(cx: &Cx) -> Result {
+    match defer(cx, async { redirect("/target") }) {
+        Deferred::Pending => view! { <p>"waiting"</p> },
+        Deferred::Ready(error) => Err(error.into()),
+    }
+}
+
+#[page("/stream-pending")]
+async fn stream_pending(cx: &Cx) -> Result {
+    match defer(cx, std::future::pending::<u8>()) {
+        Deferred::Pending => view! { <p>"first"</p> },
+        Deferred::Ready(value) => view! { <p>(value)</p> },
+    }
+}
+
+#[page("/stream-error")]
+async fn stream_error(cx: &Cx) -> Result {
+    match defer(cx, async { LateError }) {
+        Deferred::Pending => view! { <p>"waiting"</p> },
+        Deferred::Ready(error) => Err(error.into()),
+    }
+}
+
+#[page("/stream-chain")]
+async fn stream_chain(cx: &Cx) -> Result {
+    let content = match defer(cx, async { 1_u8 }) {
+        Deferred::Pending => view! { <p>"first pending"</p> },
+        Deferred::Ready(_) => match defer(cx, async { 2_u8 }) {
+            Deferred::Pending => view! { <p>"second pending"</p> },
+            Deferred::Ready(value) => view! {
+                <p>
+                    "done "
+                    (value)
+                </p>
+            },
+        },
+    }?;
+    view! { (boundary(content)) }
 }
 
 #[tokio::test]
@@ -157,4 +219,68 @@ async fn renders_pages_as_components() {
         body,
         "<h1>home</h1><p>searching for topcoat</p><p>/composed</p>"
     );
+}
+
+#[tokio::test]
+async fn deferred_pages_stream_a_boundary_swap() {
+    let router = Router::builder().page(stream).build();
+    let (status, body) = send(&router, "/stream").await;
+
+    assert_eq!(status, 200);
+    assert!(body.contains("<p>loading</p>"));
+    assert!(body.contains("data-topcoat-stream"));
+    assert!(body.contains("<template data-topcoat-swap="));
+    assert!(body.contains("<p>42</p></template>"));
+}
+
+#[tokio::test]
+async fn redirects_after_streaming_become_navigation_instructions() {
+    let router = Router::builder().page(stream_redirect).build();
+    let (status, body) = send(&router, "/stream-redirect").await;
+
+    assert_eq!(status, 200);
+    assert!(body.contains("<p>waiting</p>"));
+    assert!(body.contains("<template data-topcoat-redirect=\"/target\"></template>"));
+}
+
+#[tokio::test]
+async fn the_initial_html_is_available_before_deferred_work_finishes() {
+    let router = Router::builder().page(stream_pending).build();
+    let request = http::Request::builder()
+        .uri("/stream-pending")
+        .body(Body::empty())
+        .unwrap();
+    let mut response = router.handle(request).await;
+    let frame = tokio::time::timeout(
+        std::time::Duration::from_millis(100),
+        response.body_mut().frame(),
+    )
+    .await
+    .expect("the initial frame should not wait for deferred work")
+    .unwrap()
+    .unwrap();
+    let body = String::from_utf8(frame.into_data().unwrap().to_vec()).unwrap();
+    assert!(body.contains("<p>first</p>"));
+    assert!(body.contains("data-topcoat-stream"));
+}
+
+#[tokio::test]
+async fn errors_after_streaming_become_root_swaps() {
+    let router = Router::builder().page(stream_error).build();
+    let (status, body) = send(&router, "/stream-error").await;
+
+    assert_eq!(status, 200);
+    assert!(body.contains("<p>waiting</p>"));
+    assert!(body.contains("<template data-topcoat-swap=\"root\">internal server error</template>"));
+}
+
+#[tokio::test]
+async fn later_passes_can_discover_more_deferred_work() {
+    let router = Router::builder().page(stream_chain).build();
+    let (status, body) = send(&router, "/stream-chain").await;
+
+    assert_eq!(status, 200);
+    assert!(body.contains("<p>first pending</p>"));
+    assert!(body.contains("<p>second pending</p></template>"));
+    assert!(body.contains("<p>done 2</p></template>"));
 }
