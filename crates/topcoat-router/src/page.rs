@@ -18,7 +18,8 @@ use crate::{
     content::Html,
     error::{RedirectError, respond},
     reconcile::{
-        SWAP_SCRIPT, Snapshot, client_hashes, navigation_template, redirect_template, swap_template,
+        FRAME, SWAP_SCRIPT, Snapshot, client_hashes, navigation_template, redirect_template,
+        swap_template,
     },
     request::headers,
     response::{IntoResponse, Response},
@@ -205,6 +206,7 @@ impl Route for PageWithLayouts {
             let mut first = if let Some(hashes) = navigation.as_ref() {
                 let mut chunk = snapshot.reconcile_hashes(hashes);
                 chunk.push_str(&navigation_template(snapshot.title()));
+                chunk.push_str(FRAME);
                 chunk
             } else {
                 snapshot.html().to_owned()
@@ -224,6 +226,7 @@ impl Route for PageWithLayouts {
                 deferred,
                 pending: FuturesUnordered::new(),
                 snapshot,
+                framed: navigation.is_some(),
             };
             stream.response(first, rendered.status_code, rendered.headers, cx)
         })
@@ -255,6 +258,7 @@ struct StreamingPage {
     deferred: std::sync::Arc<DeferredState>,
     pending: FuturesUnordered<DeferredFuture>,
     snapshot: Snapshot,
+    framed: bool,
 }
 
 impl StreamingPage {
@@ -290,7 +294,7 @@ impl StreamingPage {
         loop {
             let (key, value) = self.pending.next().await?;
             self.deferred.resolve(key, value);
-            let chunk = match self.page.render_view(&self.cx, self.body.clone()).await {
+            let mut chunk = match self.page.render_view(&self.cx, self.body.clone()).await {
                 Ok(view) => {
                     let next = Snapshot::parse(view.render_response(&self.cx).html);
                     let (snapshot, chunk) = self.snapshot.reconcile(next);
@@ -301,6 +305,9 @@ impl StreamingPage {
             };
             self.pending.extend(self.deferred.take_futures());
             if !chunk.is_empty() {
+                if self.framed {
+                    chunk.push_str(FRAME);
+                }
                 return Some(chunk);
             }
         }

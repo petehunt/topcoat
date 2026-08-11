@@ -303,6 +303,7 @@ async fn navigation_requests_receive_only_server_reconciliation_chunks() {
     assert!(body.contains("data-topcoat-navigation"));
     assert!(body.contains("data-topcoat-swap"));
     assert!(body.contains("data-topcoat-hash"));
+    assert!(body.contains("<!--topcoat-frame-->"));
     assert!(!body.contains("data-topcoat-stream"));
     assert!(!body.contains("<!DOCTYPE"));
 }
@@ -336,6 +337,29 @@ async fn the_initial_html_is_available_before_deferred_work_finishes() {
     let body = String::from_utf8(frame.into_data().unwrap().to_vec()).unwrap();
     assert!(body.contains("<p>first</p>"));
     assert!(body.contains("data-topcoat-stream"));
+}
+
+#[tokio::test]
+async fn the_initial_navigation_frame_is_available_before_deferred_work_finishes() {
+    let router = Router::builder().page(stream_pending).build();
+    let request = http::Request::builder()
+        .uri("/stream-pending")
+        .header("x-topcoat-boundaries", "missing=0000000000000000")
+        .body(Body::empty())
+        .unwrap();
+    let mut response = router.handle(request).await;
+    let frame = tokio::time::timeout(
+        std::time::Duration::from_millis(100),
+        response.body_mut().frame(),
+    )
+    .await
+    .expect("the initial navigation frame should not wait for deferred work")
+    .unwrap()
+    .unwrap();
+    let body = String::from_utf8(frame.into_data().unwrap().to_vec()).unwrap();
+
+    assert!(body.contains("<p>first</p>"));
+    assert!(body.ends_with("<!--topcoat-frame-->"));
 }
 
 #[tokio::test]

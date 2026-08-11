@@ -5,6 +5,7 @@ use std::{
 
 const START: &str = "<!--topcoat-boundary ";
 const END: &str = "<!--/topcoat-boundary ";
+pub(crate) const FRAME: &str = "<!--topcoat-frame-->";
 
 pub(crate) const SWAP_SCRIPT: &str = r"<script data-topcoat-stream>(function(){
 var selector='template[data-topcoat-swap],template[data-topcoat-redirect]';
@@ -12,7 +13,9 @@ function comments(root){var w=document.createTreeWalker(root,NodeFilter.SHOW_COM
 function hashes(){var w=document.createTreeWalker(document,NodeFilter.SHOW_COMMENT),values=[],n;while(n=w.nextNode()){var t=n.data;if(t.startsWith('topcoat-boundary ')){var parts=t.slice(17).split(' ');if(parts[1])values.push(parts[0]+'='+parts[1])}}return values.join(',')}
 function replace(start,end,fragment){for(var n=start.nextSibling;n&&n!==end;){var next=n.nextSibling;n.remove();n=next}end.before(fragment);globalThis.__topcoatScan?.(start.parentNode,start,end)}
 function apply(root,template){var redirect=template.dataset.topcoatRedirect;if(redirect){location.assign(redirect);template.remove();return}var id=template.dataset.topcoatSwap;if(!id)return;if(id==='root'){var next=new DOMParser().parseFromString(template.innerHTML,'text/html');document.documentElement.innerHTML=next.documentElement.innerHTML;globalThis.__topcoatScan?.(document.body,null,null);return}var map=comments(root),start=map.get('s:'+id),end=map.get('e:'+id);if(start&&end){replace(start,end,template.content.cloneNode(true));if(template.dataset.topcoatHash)start.data='topcoat-boundary '+id+' '+template.dataset.topcoatHash}template.remove()}
-async function navigate(url,push){document.documentElement.dataset.topcoatNavigating='';try{var response=await fetch(url,{headers:{Accept:'text/html','X-Topcoat-Boundaries':hashes()}});if(!response.ok)throw new Error('navigation failed: '+response.status);var holder=document.createElement('template');holder.innerHTML=await response.text();holder.content.querySelectorAll(selector).forEach(function(template){apply(document,template)});var metadata=holder.content.querySelector('template[data-topcoat-navigation]');if(metadata&&metadata.dataset.topcoatTitle)document.title=metadata.dataset.topcoatTitle;if(push)history.pushState(null,'',response.url);else if(response.url!==location.href)history.replaceState(null,'',response.url);scrollTo(0,0)}catch(error){location.assign(url)}finally{delete document.documentElement.dataset.topcoatNavigating}}
+function applyFrame(html){var holder=document.createElement('template');holder.innerHTML=html;var metadata=holder.content.querySelector('template[data-topcoat-navigation]');holder.content.querySelectorAll(selector).forEach(function(template){apply(document,template)});if(metadata&&metadata.dataset.topcoatTitle)document.title=metadata.dataset.topcoatTitle}
+async function readFrames(response){var marker='<!--topcoat-frame-->';if(!response.body){var text=await response.text();text.split(marker).forEach(applyFrame);return}var reader=response.body.getReader(),decoder=new TextDecoder(),buffer='';for(;;){var part=await reader.read();buffer+=decoder.decode(part.value,{stream:!part.done});for(var end;(end=buffer.indexOf(marker))!==-1;){applyFrame(buffer.slice(0,end));buffer=buffer.slice(end+marker.length)}if(part.done)break}if(buffer.trim())throw new Error('incomplete navigation frame')}
+async function navigate(url,push){document.documentElement.dataset.topcoatNavigating='';try{var response=await fetch(url,{headers:{Accept:'text/html','X-Topcoat-Boundaries':hashes()}});if(!response.ok)throw new Error('navigation failed: '+response.status);await readFrames(response);if(push)history.pushState(null,'',response.url);else if(response.url!==location.href)history.replaceState(null,'',response.url);scrollTo(0,0)}catch(error){location.assign(url)}finally{delete document.documentElement.dataset.topcoatNavigating}}
 function enabled(){return document.documentElement.hasAttribute('data-topcoat-navigation')}
 document.addEventListener('click',function(event){if(!enabled()||event.defaultPrevented||event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey)return;var anchor=event.target.closest('a[href]');if(!anchor||anchor.target||anchor.hasAttribute('download'))return;var url=new URL(anchor.href,location.href);if(url.origin!==location.origin||url.protocol!=='http:'&&url.protocol!=='https:'||url.pathname===location.pathname&&url.search===location.search)return;event.preventDefault();navigate(url.href,true)});
 addEventListener('popstate',function(){if(enabled())navigate(location.href,false)});
@@ -317,6 +320,9 @@ mod tests {
         assert!(SWAP_SCRIPT.contains("fetch(url"));
         assert!(SWAP_SCRIPT.contains("X-Topcoat-Boundaries"));
         assert!(SWAP_SCRIPT.contains("dataset.topcoatHash"));
+        assert!(SWAP_SCRIPT.contains("response.body.getReader()"));
+        assert!(SWAP_SCRIPT.contains(FRAME));
+        assert!(!SWAP_SCRIPT.contains("innerHTML=await response.text()"));
         assert!(!SWAP_SCRIPT.contains("pathname.split"));
     }
 }
